@@ -1,5 +1,8 @@
 name: build
 on: [push, workflow_dispatch]
+permissions:
+  contents: write
+  id-token: write
 
 env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
@@ -34,43 +37,19 @@ jobs:
       # The CMake binaries on the Github Actions machines are (as of this writing) 3.12
       run: cmake .. -DCMAKE_BUILD_TYPE=$BUILD_TYPE
 
-        #- name: Get core count
-        #id: core_count
-        #run : cat /proc/cpuinfo  | grep processor | wc -l
-
     - name: build
       working-directory: ${{github.workspace}}/build
       shell: bash
       # Execute the build.  You can specify a specific target with "--target <NAME>"
       run: cmake --build . --config $BUILD_TYPE #--parallel ${{steps.core_count.outputs.output}}
 
-    - name: collect images
-      working-directory: ${{github.workspace}}/build
-      shell: bash
-      run: |
-        mkdir img
-        mv *.bin *.elf *.map *.hex *.uf2 img/
-
-    - name: populate image cache
-      uses: actions/cache@v3
-      with:
-        path: img
-        key: img-${{runner.os}}-${{github.run_id}}
-
-  upload:
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: restore img cache
-      uses: actions/cache@v3
-      with:
-        path: img
-        key: img-${{runner.os}}-${{github.run_id}}
-
     - name: upload artifact
       uses: actions/upload-artifact@v3
       with:
         name: images
         path: |
-          img/*
+          *.bin
+          *.elf
+          *.map
+          *.hex
+          *.uf2
