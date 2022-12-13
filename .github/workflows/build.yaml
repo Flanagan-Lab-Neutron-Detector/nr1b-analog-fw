@@ -12,7 +12,6 @@ jobs:
     steps:
     - name: setup arm-none-eabi-gcc
       uses: carlosperate/arm-none-eabi-gcc-action@v1
-      run: arm-none-eabi-gcc --version
 
     - name: checkout repo 
       uses: actions/checkout@v3
