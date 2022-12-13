@@ -10,6 +10,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    - name: setup arm-none-eabi-gcc
+      uses: carlosperate/arm-none-eabi-gcc-action@v1
+      run: arm-none-eabi-gcc --version
+
     - name: checkout repo 
       uses: actions/checkout@v3
       with:
@@ -19,7 +23,7 @@ jobs:
       # Some projects don't allow in-source building, so create a separate build directory
       # We'll use this as our working directory for all subsequent commands
       working-directory: ${{github.workspace}}
-      run:  cmake -E make_directory ${{github.workspace}}/build
+      run: cmake -E make_directory ${{github.workspace}}/build
 
     - name: configure cmake
       # Use a bash shell so we can use the same syntax for environment variable
