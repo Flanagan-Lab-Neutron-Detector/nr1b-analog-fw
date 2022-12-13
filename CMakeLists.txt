@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.12)
 set(PICO_SDK_FETCH_FROM_GIT on)
 include(pico_sdk_import.cmake)
 
-project(nr1b-analog-fw C)
+project(nr1b-analog-fw C CXX ASM)
 
 # initialize SDK
 pico_sdk_init()
