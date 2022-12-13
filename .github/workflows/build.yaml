@@ -47,7 +47,7 @@ jobs:
     - name: collect images
       working-directory: ${{github.workspace}}/build
       shell: bash
-      run:
+      run: |
         mkdir img
         mv *.bin *.elf *.map *.hex *.uf2 img/
 
