@@ -48,8 +48,8 @@ jobs:
       with:
         name: images
         path: |
-          *.bin
-          *.elf
-          *.map
-          *.hex
-          *.uf2
+          build/*.bin
+          build/*.elf
+          build/*.map
+          build/*.hex
+          build/*.uf2
