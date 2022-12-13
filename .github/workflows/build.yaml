@@ -15,26 +15,17 @@ jobs:
       with:
         submodules: recursive
 
-    - name: see what's up
-      shell: bash
-      working-directory: ${{github.workspace}}
-      run: |
-        pwd
-        echo github.workspace ${{github.workspace}}
-        echo GITHUB_WORKSPACE $GITHUB_WORKSPACE
-        ls
-
     - name: create build directory
       # Some projects don't allow in-source building, so create a separate build directory
       # We'll use this as our working directory for all subsequent commands
-      working-directory: ${{github.workspace}}/nr1b-analog-fw
-      run:  cmake -E make_directory ${{github.workspace}}/nr1b-analog-fw/build
+      working-directory: ${{github.workspace}}
+      run:  cmake -E make_directory ${{github.workspace}}/build
 
-    - name: run cmake
+    - name: configure cmake
       # Use a bash shell so we can use the same syntax for environment variable
       # access regardless of the host operating system
       shell: bash
-      working-directory: ${{github.workspace}}/nr1b-analog-fw/build
+      working-directory: ${{github.workspace}}/build
       # Note the current convention is to use the -S and -B options here to specify source 
       # and build directories, but this is only available with CMake 3.13 and higher.  
       # The CMake binaries on the Github Actions machines are (as of this writing) 3.12
@@ -44,8 +35,8 @@ jobs:
         #id: core_count
         #run : cat /proc/cpuinfo  | grep processor | wc -l
 
-    - name: Build
-      working-directory: ${{github.workspace}}/nr1b-analog-fw/build
+    - name: build
+      working-directory: ${{github.workspace}}/build
       shell: bash
       # Execute the build.  You can specify a specific target with "--target <NAME>"
       run: cmake --build . --config $BUILD_TYPE #--parallel ${{steps.core_count.outputs.output}}
