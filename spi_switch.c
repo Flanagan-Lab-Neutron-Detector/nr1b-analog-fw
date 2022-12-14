@@ -25,6 +25,7 @@
 #define DAC1_READADC     1
 
 #define BASICDAC //test option; receiving any SPI transfer will give the DAC a setting
+#undef BASICDAC
 
 // Initializing buffers
 #define BUF_LEN         0x04 // 4 bytes to trigger interrupt
@@ -410,10 +411,6 @@ void dacInit(void)
     dac_config1_1.setting.fset = 1;
     dac_config1_0.setting.vrefval = 0x03; // 0011b for 8.192v (7.5 +-1.25)
     dac_config1_1.setting.vrefval = 0x03;
-#ifdef BASICDAC
-    //dac_config1_0.setting.vrefval = 0x02;//0011b for 8.192v (7.5 +-1.25)
-    //dac_config1_1.setting.vrefval = 0x02;
-#endif
     dac_config1_0.setting.pdn = 0; // don't power down the DAC
     dac_config1_1.setting.pdn = 0;
 
