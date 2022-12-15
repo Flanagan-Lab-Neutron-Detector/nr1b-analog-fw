@@ -26,6 +26,9 @@ add_compile_options(-Wall)
 
 # Pull in basic dependencies
 target_link_libraries(spi_switch pico_stdlib hardware_spi hardware_adc)
+# SDK options
+pico_enable_stdio_usb(spi_switch 1)
+pico_enable_stdio_uart(spi_switch 0)
 
 # create map/bin/hex file etc.
 pico_add_extra_outputs(spi_switch)
