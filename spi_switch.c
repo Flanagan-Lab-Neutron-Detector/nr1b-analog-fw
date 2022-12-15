@@ -44,11 +44,11 @@ float adc1_scale = 1.0;
 // Message frames
 
 struct analog_set_frame {
-    bool rw : 1;
-    uint8_t address : 4;
+    uint32_t rw : 1;
+    uint32_t address : 4;
     uint32_t microvolts : 23;
-    uint8_t reserved : 3;
-    bool checksum : 1;
+    uint32_t reserved : 3;
+    uint32_t checksum : 1;
 };
 
 struct reset_frame {
@@ -201,9 +201,6 @@ void onSpiInt(void) // ISR from SSPRXINTR
 
 int main(void)
 {
-    // Enable UART so we can print
-    stdio_init_all();
-
     adc_init();
     //set up LED
     gpio_init(PICO_DEFAULT_LED_PIN);
@@ -220,7 +217,12 @@ int main(void)
     spiInit(); //set up SPI peripherals and CS pins
 
     dacInit();
+
+    stdio_init_all(); // for printf
+
+    sleep_ms(100);
     
+    puts("goliath online");
 
     while (1) //main loop
     {
@@ -237,9 +239,9 @@ int main(void)
             //parseCommand will return 1 if we need to send something out to DAC.
         }
 
-        if (reply_pending) {//need to send data back to controller
+        if (reply_pending) { // need to send data back to controller
             //things to respond with go into out_sys_buf
-            spi_write_read_blocking(spi0, out_sys_buf, in_sys_buf, BUF_LEN); //write DAC response, get new command
+            spi_write_read_blocking(spi0, out_sys_buf, in_sys_buf, BUF_LEN); // write DAC response, get new command
             printf("Replied, got new command: ");
             printbuf(in_sys_buf, BUF_LEN);
         }
@@ -249,9 +251,8 @@ int main(void)
             switch (selected_dac) {
                 case 0:
                     gpio_put(CS_DAC0, 0);
-                    //spi_write_blocking(spi1, dac_data_0.frame_buf, DAC_LEN);
                     //flip it around before sending
-                    for(int i = 0; i < BUF_LEN; i++){
+                    for(int i = 0; i < BUF_LEN; i++) {
                         data_frame_buf[i] = dac_data_0.frame_buf[(BUF_LEN - 1) - i];
                     }
                     spi_write_blocking(spi1, data_frame_buf, DAC_LEN); //write the base config
@@ -261,8 +262,12 @@ int main(void)
                     break;
                 case 1:
                     gpio_put(CS_DAC1, 0);
-                    spi_write_blocking(spi1, dac_data_1.frame_buf, DAC_LEN);
+                    for(int i = 0; i < BUF_LEN; i++) {
+                        data_frame_buf[i] = dac_data_1.frame_buf[(BUF_LEN - 1) - i];
+                    }
+                    spi_write_blocking(spi1, data_frame_buf, DAC_LEN);
                     gpio_put(CS_DAC1, 1);
+                    printf("Wrote to DAC1\n");
                     break;
                 default:
                     break;
@@ -305,24 +310,29 @@ bool parseCommand (void)
     }
 #endif
 
-    if (!generate_parity(in_command_buf)) {
+    if (generate_parity(in_command_buf)) {
         //if the incoming data is messy
         //assert error pin?
+        printf("Bad parity: %d\n", generate_parity(in_command_buf));
+        printbuf(in_command_buf, BUF_LEN);
         return 0;//if checksum isn't valid, break it out.
     }
 
     //what type is it? we can use first few bits to define this. make some unions
     //where does it go?
-    switch((in_command_buf[0] >> 3) & 0x0F) { //gets the 4 bits which define our address
+    printf("addr=%01x\n", (in_command_buf[0] >> 1) & 0x0F);
+    switch((in_command_buf[0] >> 1) & 0x0F) { //gets the 4 bits which define our address
         case 0x00://DAC0 SET, time to do all the important stuff
             memcpy(sys_analog_set.frame_buf, in_command_buf, BUF_LEN);
             dac_data_0.setting.dac_setting = sys_analog_set.setting.microvolts * dac0_scale;
+            printf("dac_data_0 setting = %d*%.1f = %d\n", sys_analog_set.setting.microvolts, dac0_scale, dac_data_0.setting.dac_setting);
             selected_dac = 0;
             return 1;
 
         case 0x01: //DAC1 SET
             memcpy(sys_analog_set.frame_buf, in_command_buf, BUF_LEN);
             dac_data_1.setting.dac_setting = sys_analog_set.setting.microvolts * dac1_scale;
+            printf("dac_data_1 setting = %d*%.1f = %d\n", sys_analog_set.setting.microvolts, dac1_scale, dac_data_1.setting.dac_setting);
             selected_dac = 1;
             return 1;
 
