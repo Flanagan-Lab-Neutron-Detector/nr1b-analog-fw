@@ -144,7 +144,7 @@ union analog_get_data {
     uint8_t frame_buf[BUF_LEN];
 };
 
-uint8_t data_frame_buf[BUF_LEN] = { 
+uint8_t data_frame_buf[BUF_LEN] = {
     0x01,
     0x7F,
     0xFF,
@@ -221,18 +221,20 @@ int main(void)
     stdio_init_all(); // for printf
 
     sleep_ms(100);
-    
+
     puts("goliath online");
 
     while (1) //main loop
     {
+        gpio_put(ACK, 0);
+
         if (command_received){//ISR has fired!
             memcpy(in_command_buf, in_sys_buf, BUF_LEN);//we get this out of in_sys_buf because that is acted upon by ISR
             command_received = false;
             //time to process our command
 
-            printf("Received the following command: ");
-            printbuf(in_command_buf, BUF_LEN);
+            //printf("Received the following command: ");
+            //printbuf(in_command_buf, BUF_LEN);
 
             //parse command, verify, interpret, choose next step.
             command_pending = parseCommand(); //will always fire in current state
@@ -242,14 +244,15 @@ int main(void)
         if (reply_pending) { // need to send data back to controller
             //things to respond with go into out_sys_buf
             spi_write_read_blocking(spi0, out_sys_buf, in_sys_buf, BUF_LEN); // write DAC response, get new command
-            printf("Replied, got new command: ");
-            printbuf(in_sys_buf, BUF_LEN);
+            //printf("Replied, got new command: ");
+            //printbuf(in_sys_buf, BUF_LEN);
         }
 
         if (command_pending) {
             //we need to send something out to DAC
             switch (selected_dac) {
                 case 0:
+                    gpio_put(ACK, 1);
                     gpio_put(CS_DAC0, 0);
                     //flip it around before sending
                     for(int i = 0; i < BUF_LEN; i++) {
@@ -258,16 +261,17 @@ int main(void)
                     spi_write_blocking(spi1, data_frame_buf, DAC_LEN); //write the base config
 
                     gpio_put(CS_DAC0, 1);
-                    printf("Wrote to DAC0\n");
+                    //printf("Wrote to DAC0\n");
                     break;
                 case 1:
+                    gpio_put(ACK, 1);
                     gpio_put(CS_DAC1, 0);
                     for(int i = 0; i < BUF_LEN; i++) {
                         data_frame_buf[i] = dac_data_1.frame_buf[(BUF_LEN - 1) - i];
                     }
                     spi_write_blocking(spi1, data_frame_buf, DAC_LEN);
                     gpio_put(CS_DAC1, 1);
-                    printf("Wrote to DAC1\n");
+                    //printf("Wrote to DAC1\n");
                     break;
                 default:
                     break;
@@ -283,10 +287,10 @@ int main(void)
 //return 1 if we need to reply
 bool parseCommand (void)
 {
-    printf("parsing command \n");
+    //printf("parsing command \n");
 #ifdef BASICDAC //just some debug/testing stuff
     if (in_command_buf[3] != 0x00) {
-        //let's assume we want to set DAC0 to 0x7FFFF (midscale). 
+        //let's assume we want to set DAC0 to 0x7FFFF (midscale).
         dac_data_0.setting.dac_setting = 0x803FF;//7FFFF + 1024d
         selected_dac = 0;
         for(int i = 0; i < BUF_LEN; i++){
@@ -298,10 +302,10 @@ bool parseCommand (void)
         //memcpy(data_frame_buf, in_command_buf, BUF_LEN);
         printf("Flipped buffer: ");
         printbuf(data_frame_buf, DAC_LEN);
-        
+
         return 1;
     }
-    else 
+    else
     {
         dac_data_0.setting.dac_setting = 0x00000; //set to zero
         printf("setting to 0\n");
@@ -320,19 +324,19 @@ bool parseCommand (void)
 
     //what type is it? we can use first few bits to define this. make some unions
     //where does it go?
-    printf("addr=%01x\n", (in_command_buf[0] >> 1) & 0x0F);
+    //printf("addr=%01x\n", (in_command_buf[0] >> 1) & 0x0F);
     switch((in_command_buf[0] >> 1) & 0x0F) { //gets the 4 bits which define our address
         case 0x00://DAC0 SET, time to do all the important stuff
             memcpy(sys_analog_set.frame_buf, in_command_buf, BUF_LEN);
             dac_data_0.setting.dac_setting = sys_analog_set.setting.microvolts * dac0_scale;
-            printf("dac_data_0 setting = %d*%.1f = %d\n", sys_analog_set.setting.microvolts, dac0_scale, dac_data_0.setting.dac_setting);
+            //printf("dac_data_0 setting = %d*%.1f = %d\n", sys_analog_set.setting.microvolts, dac0_scale, dac_data_0.setting.dac_setting);
             selected_dac = 0;
             return 1;
 
         case 0x01: //DAC1 SET
             memcpy(sys_analog_set.frame_buf, in_command_buf, BUF_LEN);
             dac_data_1.setting.dac_setting = sys_analog_set.setting.microvolts * dac1_scale;
-            printf("dac_data_1 setting = %d*%.1f = %d\n", sys_analog_set.setting.microvolts, dac1_scale, dac_data_1.setting.dac_setting);
+            //printf("dac_data_1 setting = %d*%.1f = %d\n", sys_analog_set.setting.microvolts, dac1_scale, dac_data_1.setting.dac_setting);
             selected_dac = 1;
             return 1;
 
@@ -465,7 +469,7 @@ void spiInit(void)
 
     printf("Initializing SPI\n");
     // Enable SPI 0 at 1 MHz and connect to GPIOs
-    spi_init(spi0, 1000 * 1000);
+    spi_init(spi0, 4 * 1000 * 1000);
     spi_set_format(spi0, 8, SPI_CPOL_0, SPI_CPHA_1, SPI_MSB_FIRST); // configure SPH = 1 for proper behavior with DAC
     spi_set_slave(spi0, true);
     gpio_set_function(4, GPIO_FUNC_SPI); // RX
@@ -477,13 +481,13 @@ void spiInit(void)
 
 
     // creating an interrupt on SPI0 buffer filling up
-    irq_add_shared_handler(SPI0_IRQ, onSpiInt, 1); 
+    irq_add_shared_handler(SPI0_IRQ, onSpiInt, 1);
     irq_set_enabled(SPI0_IRQ, true);
     // enabling the masking for the RX int
     *((io_rw_32 *) (SPI0_BASE + SPI_SSPIMSC_OFFSET))=(1<<2);
 
     // now we set up SPI1 as master.
-    spi_init(spi1, 1000 * 1000);
+    spi_init(spi1, 4 * 1000 * 1000);
 
     spi_set_format(spi1, 8, SPI_CPOL_0, SPI_CPHA_1, SPI_MSB_FIRST); // configure SPH = 1 for proper behavior with DAC
     gpio_set_function(8,  GPIO_FUNC_SPI); // RX, 16
@@ -491,7 +495,7 @@ void spiInit(void)
     gpio_set_function(11, GPIO_FUNC_SPI); // TX, 19
     // Make the SPI pins available to picotool
     bi_decl(bi_3pins_with_func(8, 11, 10, GPIO_FUNC_SPI));
-    
+
 }
 
 // keeping this for debug purposes, just prints out the supplied buffer
