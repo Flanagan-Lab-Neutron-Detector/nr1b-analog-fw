@@ -220,6 +220,10 @@ int main(void)
 
     stdio_init_all(); // for printf
 
+    // ACK and ERROR initially low
+    gpio_put(ACK, 0);
+    gpio_put(ERROR, 0);
+
     sleep_ms(100);
 
     puts("goliath online");
