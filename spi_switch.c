@@ -214,11 +214,11 @@ int main(void)
     adc_gpio_init(DAC0_READPIN);
     adc_gpio_init(DAC1_READPIN);
 
+    stdio_init_all(); // for printf
+
     spiInit(); //set up SPI peripherals and CS pins
 
     dacInit();
-
-    stdio_init_all(); // for printf
 
     // ACK and ERROR initially low
     gpio_put(ACK, 0);
