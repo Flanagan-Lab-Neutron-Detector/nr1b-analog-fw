@@ -39,12 +39,6 @@
 uint8_t in_sys_buf[BUF_LEN], out_sys_buf[BUF_LEN], in_dac_buf[BUF_LEN], out_dac_buf[BUF_LEN], in_command_buf[BUF_LEN];
 uint8_t empty_buf, null_buf[EMPTY_LEN];//for flushing buffers
 
-float dac0_scale = 1.0; // DAC0 one-point calibration [uV/bit]
-float dac1_scale = 1.0; // DAC1 one-point calibration [uV/bit]
-
-float adc0_scale = 1.0; // ADC0 one-point calibration [bit/uV]
-float adc1_scale = 1.0; // ADC1 one-point calibration [bit/uV]
-
 // Controller Message frames
 
 /** @brief Analog set frame
@@ -349,14 +343,14 @@ bool parseCommand(void)
     switch((in_command_buf[0] >> 1) & 0x0F) { //gets the 4 bits which define our address
         case 0x00:// DAC0 SET
             memcpy(sys_analog_set.frame_buf, in_command_buf, BUF_LEN);
-            dac_data_0.setting.dac_setting = sys_analog_set.setting.microvolts * dac0_scale;
+            dac_data_0.setting.dac_setting = sys_analog_set.setting.microvolts;
             //printf("dac_data_0 setting = %d*%.1f = %d\n", sys_analog_set.setting.microvolts, dac0_scale, dac_data_0.setting.dac_setting);
             selected_dac = 0;
             return true; // we have a command to process
 
         case 0x01: // DAC1 SET
             memcpy(sys_analog_set.frame_buf, in_command_buf, BUF_LEN);
-            dac_data_1.setting.dac_setting = sys_analog_set.setting.microvolts * dac1_scale;
+            dac_data_1.setting.dac_setting = sys_analog_set.setting.microvolts;
             //printf("dac_data_1 setting = %d*%.1f = %d\n", sys_analog_set.setting.microvolts, dac1_scale, dac_data_1.setting.dac_setting);
             selected_dac = 1;
             return true; // we have a command to process
@@ -365,7 +359,7 @@ bool parseCommand(void)
             return true; // we have a command to process
 
         case 0x03: // ADC0 GET
-            sys_analog_get.setting.microvolts = last_adc0 * adc0_scale;
+            sys_analog_get.setting.microvolts = last_adc0;
             sys_analog_get.setting.checksum = 0;
             sys_analog_get.setting.checksum = generate_parity(sys_analog_get.frame_buf);
             memcpy(out_sys_buf, sys_analog_get.frame_buf, BUF_LEN);
@@ -373,7 +367,7 @@ bool parseCommand(void)
             return false; // no command
 
         case 0x04: // ADC1 GET
-            sys_analog_get.setting.microvolts = last_adc1 * adc1_scale;
+            sys_analog_get.setting.microvolts = last_adc1;
             memcpy(out_sys_buf, sys_analog_get.frame_buf, BUF_LEN);
             reply_pending = 1;
             return false; // no command
