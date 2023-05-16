@@ -1,4 +1,8 @@
-// SPI master and slave!
+/** @file spi_switch.c
+ * @brief Main file for analog controller
+ * 
+ * @authors Isaac Kelly, Aidan Medcalf
+ */
 
 // stdlib
 #include <stdio.h>
@@ -12,17 +16,17 @@
 #include "hardware/adc.h"
 
 // GPIO defines
-#define CS_DAC0          9  // active low
-#define ALARM_DAC0       14 // active low, shows when tempcal is done
-#define CS_DAC1          12
-#define ALARM_DAC1       15
+#define CS_DAC0          9  // DAC0 Negative Chip Select
+#define ALARM_DAC0       14 // DAC0 tempcal done signal, active low
+#define CS_DAC1          12 // DAC1 Negative Chip Select
+#define ALARM_DAC1       15 // DAC1 tempcal done signal, active low
 #define LDAC             13 // register -> dac output, active low, enable with LDACMODE
 #define ACK              2  // acknowledge to controller
 #define ERROR            3  // error to controller
-#define DAC0_READPIN     26 // GPIO pin
-#define DAC0_READADC     0  // ADC pin
-#define DAC1_READPIN     27
-#define DAC1_READADC     1
+#define DAC0_READPIN     26 // DAC0 ADC GPIO pin
+#define DAC0_READADC     0  // DAC0 ADC channel
+#define DAC1_READPIN     27 // DAC1 ADC GPIO pin
+#define DAC1_READADC     1  // DAC1 ADC channel
 
 #define BASICDAC //test option; receiving any SPI transfer will give the DAC a setting
 #undef BASICDAC
@@ -35,83 +39,98 @@
 uint8_t in_sys_buf[BUF_LEN], out_sys_buf[BUF_LEN], in_dac_buf[BUF_LEN], out_dac_buf[BUF_LEN], in_command_buf[BUF_LEN];
 uint8_t empty_buf, null_buf[EMPTY_LEN];//for flushing buffers
 
-float dac0_scale = 1.0; //uV per bit, important for calibration
-float dac1_scale = 1.0;
+float dac0_scale = 1.0; // DAC0 one-point calibration [uV/bit]
+float dac1_scale = 1.0; // DAC1 one-point calibration [uV/bit]
 
-float adc0_scale = 1.0; //bit per uV
-float adc1_scale = 1.0;
+float adc0_scale = 1.0; // ADC0 one-point calibration [bit/uV]
+float adc1_scale = 1.0; // ADC1 one-point calibration [bit/uV]
 
-// Message frames
+// Controller Message frames
 
+/** @brief Analog set frame
+ * Controller SPI frame to set DAC output.
+ */
 struct analog_set_frame {
-    uint32_t rw : 1;
-    uint32_t address : 4;
-    uint32_t microvolts : 23;
-    uint32_t reserved : 3;
-    uint32_t checksum : 1;
+    uint32_t rw         : 1;  // Read/Write bit
+    uint32_t address    : 4;  // SPI address (command)
+    uint32_t microvolts : 23; // DAC output in raw counts
+    uint32_t reserved   : 3;  // Unused (zero)
+    uint32_t checksum   : 1;  // Parity bit
 };
 
+/** @brief Reset frame
+ * Controller SPI frame to reset DACs and MCU.
+ */
 struct reset_frame {
-    bool rw : 1;
-    uint8_t address : 4;
-    bool mcu : 1;
-    bool dac0 : 1;
-    bool dac1 : 1;
-    uint32_t reserved : 23;
-    bool checksum : 1;
+    bool rw             : 1;  // Read/Write bit
+    uint8_t address     : 4;  // SPI address (command)
+    bool mcu            : 1;  // Reset MCU?
+    bool dac0           : 1;  // Reset DAC0?
+    bool dac1           : 1;  // Reset DAC1?
+    uint32_t reserved   : 23; // Unused (zero)
+    bool checksum       : 1;  // Parity bit
 };
 
+/** @brief Analog get frame
+ * Controller SPI frame to get ADC input.
+ */
 struct analog_get_frame {
-    bool rw : 1;
-    uint8_t address : 4;
-    uint32_t microvolts: 23;
-    uint8_t reserved : 3;
-    bool checksum : 1;
+    bool rw             : 1;  // Read/Write bit
+    uint8_t address     : 4;  // SPI address (command)
+    uint32_t microvolts : 23; // ADC input in raw counts
+    uint8_t reserved    : 3;  // Unused (zero)
+    bool checksum       : 1;  // Parity bit
 };
 
-/*
+// DAC Message frames
+
+/** @brief DAC data frame
+ * DAC SPI frame to set DAC output.
+ * @note DAC SPI frames are reversed.
+ */
 struct dac_data_frame {
-    bool rw : 1;
-    uint8_t address : 7;
-    uint32_t dac_setting : 20;
-    uint8_t reserved0 : 4;
-};
-*/
-struct dac_data_frame {//get that order reversed!
-    uint8_t reserved0 : 4;
-    uint32_t dac_setting : 20;
-    uint8_t address : 7;
-    bool rw : 1;
+    uint8_t reserved0    : 4;  // Unused (zero)
+    uint32_t dac_setting : 20; // DAC output in raw counts
+    uint8_t address      : 7;  // Data address
+    bool rw              : 1;  // Read/Write bit
 };
 
+/** @brief DAC config1 frame
+ * DAC SPI frame to set DAC configuration.
+ * @note DAC SPI frames are reversed.
+ */
 struct dac_config1_frame {
-    bool rw : 1;
-    uint8_t address : 7;
-    bool en_tmp_cal : 1;
-    uint8_t reserved0 : 3;
-    uint8_t tnh_mask: 2;
-    uint8_t reserved1 : 3;
-    bool ldac_mode : 1;
-    bool fsdo : 1;
-    bool enalmp : 1;
-    bool dsdo : 1;
-    bool fset : 1;
-    uint8_t vrefval : 4;
-    bool reserved2 : 1;
-    bool pdn : 1;
-    uint8_t reserved3 : 4;
+    bool rw              : 1;
+    uint8_t address      : 7;
+    bool en_tmp_cal      : 1;
+    uint8_t reserved0    : 3;
+    uint8_t tnh_mask     : 2;
+    uint8_t reserved1    : 3;
+    bool ldac_mode       : 1;
+    bool fsdo            : 1;
+    bool enalmp          : 1;
+    bool dsdo            : 1;
+    bool fset            : 1;
+    uint8_t vrefval      : 4;
+    bool reserved2       : 1;
+    bool pdn             : 1;
+    uint8_t reserved3    : 4;
 };
 
+/** @brief DAC trigger frame
+ * DAC SPI frame to set DAC trigger configuration.
+ * @note DAC SPI frames are reversed.
+ */
 struct dac_trigger_frame {
-    bool rw : 1;
-    uint8_t address : 7;
-    uint16_t reserved0 : 15;
-    bool rcltemp : 1;
-    bool reserved1 : 1;
-    bool srst : 1;
-    bool sclr : 1;
-    bool reserved2 : 1;
-    uint8_t reserved3 : 4;
+    bool rw              : 1;
+    uint8_t address      : 7;
+    uint16_t reserved0   : 15;
+    bool rcltemp         : 1;
+    bool reserved1       : 1;
+    bool srst            : 1;
+    bool sclr            : 1;
+    bool reserved2       : 1;
+    uint8_t reserved3    : 4;
 };
 
 union dac_data {
@@ -144,6 +163,8 @@ union analog_get_data {
     uint8_t frame_buf[BUF_LEN];
 };
 
+// Pre-set buffers
+
 uint8_t data_frame_buf[BUF_LEN] = {
     0x01,
     0x7F,
@@ -158,6 +179,8 @@ uint8_t config_frame_buf[BUF_LEN] = {
     0x80
 };
 
+// Comms globals
+
 union dac_data dac_data_0, dac_data_1;
 union dac_config1 dac_config1_0, dac_config1_1;
 union dac_trigger dac_trigger_0, dac_trigger_1;
@@ -166,7 +189,7 @@ union analog_set_data sys_analog_set;
 union reset_data sys_reset;
 union analog_get_data sys_analog_get;
 
-
+// Main loop globals
 
 bool command_received = false;
 bool reply_pending = false;
@@ -183,16 +206,18 @@ void dacInit(void);
 
 uint32_t readADC(uint8_t id);
 
-uint32_t last_adc0 = 24;
-uint32_t last_adc1 = 56;
+uint32_t last_adc0 = 24; // test
+uint32_t last_adc1 = 56; // test
 
-
-void onSpiInt(void) // ISR from SSPRXINTR
+/** @brief SPI interrupt handler
+ * ISR from SSPXINTR. Reads SPI command from controller and sets @ref command_received flag.
+*/
+void onSpiInt(void)
 {
     // Since we have at least 4 bytes in our buffer (interrupt has fired) we read 4.
     spi_read_blocking(spi0, empty_buf, in_sys_buf, BUF_LEN); // Read buffer in, send 0s back.
     // Now we clear the rest of the buffer.
-    while(spi_is_readable(spi0)) {
+    while (spi_is_readable(spi0)) {
         spi_read_blocking(spi0, empty_buf, null_buf, EMPTY_LEN); // Read buffer into nowhere, send 0s back.
     }
     command_received = true; // Set the flag, will be processed by main loop.
@@ -230,66 +255,60 @@ int main(void)
 
     while (1) //main loop
     {
+        // indicate that we are ready to receive a command
         gpio_put(ACK, 0);
 
-        if (command_received){//ISR has fired!
-            memcpy(in_command_buf, in_sys_buf, BUF_LEN);//we get this out of in_sys_buf because that is acted upon by ISR
-            command_received = false;
-            //time to process our command
+        // Service flags
 
-            //printf("Received the following command: ");
-            //printbuf(in_command_buf, BUF_LEN);
+        if (command_received) { // we have a command to process
+            memcpy(in_command_buf, in_sys_buf, BUF_LEN); // in_sys_buf is written to by ISR
+            command_received = false; // clear flag
 
-            //parse command, verify, interpret, choose next step.
-            command_pending = parseCommand(); //will always fire in current state
-            //parseCommand will return 1 if we need to send something out to DAC.
+            // parse command, verify, interpret, choose next step.
+            command_pending = parseCommand();
         }
 
         if (reply_pending) { // need to send data back to controller
-            //things to respond with go into out_sys_buf
             spi_write_read_blocking(spi0, out_sys_buf, in_sys_buf, BUF_LEN); // write DAC response, get new command
-            //printf("Replied, got new command: ");
-            //printbuf(in_sys_buf, BUF_LEN);
         }
 
-        if (command_pending) {
-            //we need to send something out to DAC
+        if (command_pending) { // we need to send something out to DAC
             switch (selected_dac) {
-                case 0:
-                    gpio_put(ACK, 1);
-                    gpio_put(CS_DAC0, 0);
-                    //flip it around before sending
+                case 0: // DAC0
+                    gpio_put(ACK, 1); // Acknowledge command
+                    gpio_put(CS_DAC0, 0); // select DAC0
+                    // send in reverse order
                     for(int i = 0; i < BUF_LEN; i++) {
                         data_frame_buf[i] = dac_data_0.frame_buf[(BUF_LEN - 1) - i];
                     }
-                    spi_write_blocking(spi1, data_frame_buf, DAC_LEN); //write the base config
+                    spi_write_blocking(spi1, data_frame_buf, DAC_LEN); // write the base config
 
-                    gpio_put(CS_DAC0, 1);
-                    //printf("Wrote to DAC0\n");
+                    gpio_put(CS_DAC0, 1); // deselect DAC0
                     break;
-                case 1:
-                    gpio_put(ACK, 1);
-                    gpio_put(CS_DAC1, 0);
+                case 1: // DAC1
+                    gpio_put(ACK, 1); // Acknowledge command
+                    gpio_put(CS_DAC1, 0); // select DAC1
+                    // send in reverse order
                     for(int i = 0; i < BUF_LEN; i++) {
                         data_frame_buf[i] = dac_data_1.frame_buf[(BUF_LEN - 1) - i];
                     }
-                    spi_write_blocking(spi1, data_frame_buf, DAC_LEN);
-                    gpio_put(CS_DAC1, 1);
-                    //printf("Wrote to DAC1\n");
+                    spi_write_blocking(spi1, data_frame_buf, DAC_LEN); // write the base config
+                    gpio_put(CS_DAC1, 1); // deselect DAC1
                     break;
                 default:
                     break;
             }
-            command_pending = false;
+            command_pending = false; // clear flag
         }
     }
 
     return 0;
 }
 
-
-//return 1 if we need to reply
-bool parseCommand (void)
+/** @brief Parse command from controller
+ * @return true if main loop has a command to process
+ */
+bool parseCommand(void)
 {
     //printf("parsing command \n");
 #ifdef BASICDAC //just some debug/testing stuff
@@ -318,62 +337,67 @@ bool parseCommand (void)
     }
 #endif
 
+    // Check parity
     if (generate_parity(in_command_buf)) {
-        //if the incoming data is messy
-        //assert error pin?
+        // TODO: assert error pin
         printf("Bad parity: %d\n", generate_parity(in_command_buf));
         printbuf(in_command_buf, BUF_LEN);
-        return 0;//if checksum isn't valid, break it out.
+        return false; //if checksum isn't valid, break it out.
     }
 
-    //what type is it? we can use first few bits to define this. make some unions
-    //where does it go?
-    //printf("addr=%01x\n", (in_command_buf[0] >> 1) & 0x0F);
+    // Decode address (command)
     switch((in_command_buf[0] >> 1) & 0x0F) { //gets the 4 bits which define our address
-        case 0x00://DAC0 SET, time to do all the important stuff
+        case 0x00:// DAC0 SET
             memcpy(sys_analog_set.frame_buf, in_command_buf, BUF_LEN);
             dac_data_0.setting.dac_setting = sys_analog_set.setting.microvolts * dac0_scale;
             //printf("dac_data_0 setting = %d*%.1f = %d\n", sys_analog_set.setting.microvolts, dac0_scale, dac_data_0.setting.dac_setting);
             selected_dac = 0;
-            return 1;
+            return true; // we have a command to process
 
-        case 0x01: //DAC1 SET
+        case 0x01: // DAC1 SET
             memcpy(sys_analog_set.frame_buf, in_command_buf, BUF_LEN);
             dac_data_1.setting.dac_setting = sys_analog_set.setting.microvolts * dac1_scale;
             //printf("dac_data_1 setting = %d*%.1f = %d\n", sys_analog_set.setting.microvolts, dac1_scale, dac_data_1.setting.dac_setting);
             selected_dac = 1;
-            return 1;
+            return true; // we have a command to process
 
-        case 0x02: //RESET, deal later
-            return 1;//need command
+        case 0x02: // RESET TODO
+            return true; // we have a command to process
 
-        case 0x03://ADC0 GET, time to pack up the frame
+        case 0x03: // ADC0 GET
             sys_analog_get.setting.microvolts = last_adc0 * adc0_scale;
             sys_analog_get.setting.checksum = 0;
             sys_analog_get.setting.checksum = generate_parity(sys_analog_get.frame_buf);
             memcpy(out_sys_buf, sys_analog_get.frame_buf, BUF_LEN);
-            //checksum
             reply_pending = 1;
-            return 0;//no command
+            return false; // no command
 
-        case 0x04://ADC1 GET
+        case 0x04: // ADC1 GET
             sys_analog_get.setting.microvolts = last_adc1 * adc1_scale;
             memcpy(out_sys_buf, sys_analog_get.frame_buf, BUF_LEN);
-            //checksum too
             reply_pending = 1;
-            return 0;//no command
+            return false; // no command
 
         default:
-            return 0;
+            return false; // no command
     }
 }
 
-bool generate_parity(uint8_t frame[DAC_LEN]){
+/** @brief Generate parity bit for a frame
+ * @param frame frame to generate parity for
+ * @return parity bit
+ */
+bool generate_parity(uint8_t frame[DAC_LEN])
+{
     // parity with last bit
     uint32_t fullframe = (frame[0]) + (frame[1] << 8) + (frame [2] << 16) + (frame [3] << 24);
     return __builtin_parity(fullframe); // 1 if odd, 0 if even.
 }
 
+/** @brief Read ADC
+ * @param id ADC to read (0 or 1)
+ * @return ADC value or 0 if invalid id
+ */
 uint32_t readADC(uint8_t id)
 {
     switch(id) {
@@ -388,6 +412,8 @@ uint32_t readADC(uint8_t id)
     }
 }
 
+/** @brief Initialize DACs
+ */
 void dacInit(void)
 {
     // DACs connected to SPI1
@@ -461,6 +487,8 @@ void dacInit(void)
     printf("DACs enabled");
 }
 
+/** @brief Initialize SPI
+ */
 void spiInit(void)
 {
     // set up CS pins, active low, default to high
@@ -472,7 +500,7 @@ void spiInit(void)
     gpio_put(CS_DAC1, 1);
 
     printf("Initializing SPI\n");
-    // Enable SPI 0 at 1 MHz and connect to GPIOs
+    // Enable SPI 0 at 4 MHz and connect to GPIOs
     spi_init(spi0, 4 * 1000 * 1000);
     spi_set_format(spi0, 8, SPI_CPOL_0, SPI_CPHA_1, SPI_MSB_FIRST); // configure SPH = 1 for proper behavior with DAC
     spi_set_slave(spi0, true);
@@ -483,7 +511,6 @@ void spiInit(void)
     // Make the SPI pins available to picotool
     bi_decl(bi_4pins_with_func(4, 7, 6, 5, GPIO_FUNC_SPI));
 
-
     // creating an interrupt on SPI0 buffer filling up
     irq_add_shared_handler(SPI0_IRQ, onSpiInt, 1);
     irq_set_enabled(SPI0_IRQ, true);
@@ -492,7 +519,6 @@ void spiInit(void)
 
     // now we set up SPI1 as master.
     spi_init(spi1, 4 * 1000 * 1000);
-
     spi_set_format(spi1, 8, SPI_CPOL_0, SPI_CPHA_1, SPI_MSB_FIRST); // configure SPH = 1 for proper behavior with DAC
     gpio_set_function(8,  GPIO_FUNC_SPI); // RX, 16
     gpio_set_function(10, GPIO_FUNC_SPI); // SCK, 18
@@ -502,7 +528,10 @@ void spiInit(void)
 
 }
 
-// keeping this for debug purposes, just prints out the supplied buffer
+/** @brief Print a buffer in hex (debug)
+ * @param buf buffer to print
+ * @param len length of buffer
+ */
 void printbuf(uint8_t *buf, size_t len)
 {
     int i;
