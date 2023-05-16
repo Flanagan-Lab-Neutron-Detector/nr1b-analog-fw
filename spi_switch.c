@@ -196,7 +196,7 @@ bool parseCommand(void);
 bool generate_parity(uint8_t frame[DAC_LEN]);
 void spiInit(void);
 void printbuf(uint8_t *buf, size_t len);
-void dacInit(void);
+bool dacInit(void);
 
 uint32_t readADC(uint8_t id);
 
@@ -240,16 +240,17 @@ int main(void)
     gpio_set_dir(ERROR, GPIO_OUT);
     adc_gpio_init(DAC0_READPIN);
     adc_gpio_init(DAC1_READPIN);
+    // ACK and ERROR initially low
+    gpio_put(ACK, 0);
+    gpio_put(ERROR, 0);
 
     stdio_init_all(); // for printf
 
     spiInit(); //set up SPI peripherals and CS pins
 
-    dacInit();
-
-    // ACK and ERROR initially low
-    gpio_put(ACK, 0);
-    gpio_put(ERROR, 0);
+    bool dac_init_success = dacInit();
+    if (!dac_init_success)
+        gpio_put(ERROR, 1);
 
     sleep_ms(100);
 
@@ -410,8 +411,9 @@ uint32_t readADC(uint8_t id)
 }
 
 /** @brief Initialize DACs
+ * @return true if successful
  */
-void dacInit(void)
+bool dacInit(void)
 {
     // DACs connected to SPI1
     gpio_init(LDAC);
@@ -474,7 +476,7 @@ void dacInit(void)
     printbuf(dac_config1_0.frame_buf, BUF_LEN);
 
     //spi_write_blocking(spi1, dac_config1_0.frame_buf, DAC_LEN); //write the base config
-    spi_write_blocking(spi1, config_frame_buf, DAC_LEN); // write the base config
+    int bytes_written = spi_write_blocking(spi1, config_frame_buf, DAC_LEN); // write the base config
     printf("Desired results: ");
     printbuf(config_frame_buf, BUF_LEN);
 
@@ -482,6 +484,13 @@ void dacInit(void)
     gpio_put(CS_DAC0, 1); // disable both again
     gpio_put(CS_DAC1, 1);
     printf("DACs enabled");
+
+    if (bytes_written != DAC_LEN) {
+        printf("Error: %d bytes written, expected %d\n", bytes_written, DAC_LEN);
+        return false;
+    }
+
+    return true;
 }
 
 /** @brief Initialize SPI
