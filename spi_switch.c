@@ -217,6 +217,14 @@ void onSpiInt(void)
     command_received = true; // Set the flag, will be processed by main loop.
 }
 
+int dac_send(union dac_data *data)
+{
+    // send in reverse order
+    for(int i = 0; i < BUF_LEN; i++) {
+        data_frame_buf[i] = data->frame_buf[(BUF_LEN - 1) - i];
+    }
+    spi_write_blocking(spi1, data_frame_buf, DAC_LEN); // write the base config
+}
 
 int main(void)
 {
@@ -267,30 +275,25 @@ int main(void)
         }
 
         if (command_pending) { // we need to send something out to DAC
+            int bytes_sent = 0;
             switch (selected_dac) {
                 case 0: // DAC0
                     gpio_put(ACK, 1); // Acknowledge command
                     gpio_put(CS_DAC0, 0); // select DAC0
-                    // send in reverse order
-                    for(int i = 0; i < BUF_LEN; i++) {
-                        data_frame_buf[i] = dac_data_0.frame_buf[(BUF_LEN - 1) - i];
-                    }
-                    spi_write_blocking(spi1, data_frame_buf, DAC_LEN); // write the base config
-
+                    bytes_sent = dac_send(&dac_data_0);
                     gpio_put(CS_DAC0, 1); // deselect DAC0
                     break;
                 case 1: // DAC1
                     gpio_put(ACK, 1); // Acknowledge command
                     gpio_put(CS_DAC1, 0); // select DAC1
-                    // send in reverse order
-                    for(int i = 0; i < BUF_LEN; i++) {
-                        data_frame_buf[i] = dac_data_1.frame_buf[(BUF_LEN - 1) - i];
-                    }
-                    spi_write_blocking(spi1, data_frame_buf, DAC_LEN); // write the base config
+                    bytes_sent = dac_send(&dac_data_1);
                     gpio_put(CS_DAC1, 1); // deselect DAC1
                     break;
                 default:
                     break;
+            }
+            if (bytes_sent != DAC_LEN) {
+                gpio_put(ERROR, 1); // indicate error
             }
             command_pending = false; // clear flag
         }
