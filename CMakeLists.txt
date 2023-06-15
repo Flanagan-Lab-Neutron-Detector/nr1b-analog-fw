@@ -22,7 +22,7 @@ add_executable(spi_switch
         spi_switch.c
         )
 
-add_compile_options(-Wall)
+add_compile_options(-Wall -Wextra)
 
 # Pull in basic dependencies
 target_link_libraries(spi_switch pico_stdlib hardware_spi hardware_adc)
