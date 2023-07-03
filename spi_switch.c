@@ -15,18 +15,8 @@
 #include "hardware/irq.h"
 #include "hardware/adc.h"
 
-// GPIO defines
-#define CS_DAC0          9  // DAC0 Negative Chip Select
-#define ALARM_DAC0       14 // DAC0 tempcal done signal, active low
-#define CS_DAC1          12 // DAC1 Negative Chip Select
-#define ALARM_DAC1       15 // DAC1 tempcal done signal, active low
-#define LDAC             13 // register -> dac output, active low, enable with LDACMODE
-#define ACK              2  // acknowledge to controller
-#define ERROR            3  // error to controller
-#define DAC0_READPIN     26 // DAC0 ADC GPIO pin
-#define DAC0_READADC     0  // DAC0 ADC channel
-#define DAC1_READPIN     27 // DAC1 ADC GPIO pin
-#define DAC1_READADC     1  // DAC1 ADC channel
+// application libraries
+#include "pindefs.h"
 
 #define BASICDAC //test option; receiving any SPI transfer will give the DAC a setting
 #undef BASICDAC
@@ -217,17 +207,25 @@ void onSpiInt(void)
     command_received = true; // Set the flag, will be processed by main loop.
 }
 
-int dac_send(union dac_data *data)
+int dac_send(uint cspin, union dac_data *data)
 {
+    gpio_put(cspin, 0); // select DAC
     // send in reverse order
     for(int i = 0; i < BUF_LEN; i++) {
         data_frame_buf[i] = data->frame_buf[(BUF_LEN - 1) - i];
     }
-    spi_write_blocking(spi1, data_frame_buf, DAC_LEN); // write the base config
+    //gpio_put(cspin, 0); // select DAC
+    int nwritten = spi_write_blocking(spi1, data_frame_buf, DAC_LEN); // write the base config
+    gpio_put(cspin, 1); // deselect DAC
+    return nwritten;
 }
 
 int main(void)
 {
+    stdio_init_all(); // for printf
+
+    sleep_ms(10000);
+
     adc_init();
     //set up LED
     gpio_init(PICO_DEFAULT_LED_PIN);
@@ -244,15 +242,12 @@ int main(void)
     gpio_put(ACK, 0);
     gpio_put(ERROR, 0);
 
-    stdio_init_all(); // for printf
-
     spiInit(); //set up SPI peripherals and CS pins
 
     bool dac_init_success = dacInit();
     if (!dac_init_success)
         gpio_put(ERROR, 1);
-
-    sleep_ms(100);
+    printf("dac_init_success = %d\n", dac_init_success);
 
     puts("goliath online");
 
@@ -275,20 +270,33 @@ int main(void)
             spi_write_read_blocking(spi0, out_sys_buf, in_sys_buf, BUF_LEN); // write DAC response, get new command
         }
 
+        /*command_pending = true;
+        selected_dac = selected_dac ? 0 : 1; // toggle DAC selection
+        switch (selected_dac) {
+            case 0: // DAC0
+                dac_data_0.setting.dac_setting = dac_data_0.setting.dac_setting + 100000 % (1 << 20);
+                break;
+            case 1: // DAC1
+                dac_data_1.setting.dac_setting = dac_data_1.setting.dac_setting + 100000 % (1 << 20);
+                break;
+            default:
+                break;
+        }*/
+
         if (command_pending) { // we need to send something out to DAC
             int bytes_sent = 0;
             switch (selected_dac) {
                 case 0: // DAC0
                     gpio_put(ACK, 1); // Acknowledge command
-                    gpio_put(CS_DAC0, 0); // select DAC0
-                    bytes_sent = dac_send(&dac_data_0);
-                    gpio_put(CS_DAC0, 1); // deselect DAC0
+                    //gpio_put(CS_DAC0, 0); // select DAC0
+                    bytes_sent = dac_send(CS_DAC0, &dac_data_0);
+                    //gpio_put(CS_DAC0, 1); // deselect DAC0
                     break;
                 case 1: // DAC1
                     gpio_put(ACK, 1); // Acknowledge command
-                    gpio_put(CS_DAC1, 0); // select DAC1
-                    bytes_sent = dac_send(&dac_data_1);
-                    gpio_put(CS_DAC1, 1); // deselect DAC1
+                    //gpio_put(CS_DAC1, 0); // select DAC1
+                    bytes_sent = dac_send(CS_DAC1, &dac_data_1);
+                    //gpio_put(CS_DAC1, 1); // deselect DAC1
                     break;
                 default:
                     break;
@@ -298,6 +306,8 @@ int main(void)
             }
             command_pending = false; // clear flag
         }
+
+        sleep_ms(100);
     }
 
     return 0;
@@ -507,7 +517,7 @@ void spiInit(void)
 
     printf("Initializing SPI\n");
     // Enable SPI 0 at 4 MHz and connect to GPIOs
-    spi_init(spi0, 4 * 1000 * 1000);
+    spi_init(spi0, 1 * 1000 * 1000);
     spi_set_format(spi0, 8, SPI_CPOL_0, SPI_CPHA_1, SPI_MSB_FIRST); // configure SPH = 1 for proper behavior with DAC
     spi_set_slave(spi0, true);
     gpio_set_function(4, GPIO_FUNC_SPI); // RX
@@ -524,7 +534,7 @@ void spiInit(void)
     *((io_rw_32 *) (SPI0_BASE + SPI_SSPIMSC_OFFSET))=(1<<2);
 
     // now we set up SPI1 as master.
-    spi_init(spi1, 4 * 1000 * 1000);
+    spi_init(spi1, 1 * 1000 * 1000);
     spi_set_format(spi1, 8, SPI_CPOL_0, SPI_CPHA_1, SPI_MSB_FIRST); // configure SPH = 1 for proper behavior with DAC
     gpio_set_function(8,  GPIO_FUNC_SPI); // RX, 16
     gpio_set_function(10, GPIO_FUNC_SPI); // SCK, 18
