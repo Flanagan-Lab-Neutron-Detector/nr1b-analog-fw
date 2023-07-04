@@ -19,5 +19,8 @@
 #define DAC0_READADC     0  // DAC0 ADC channel
 #define DAC1_READPIN     27 // DAC1 ADC GPIO pin
 #define DAC1_READADC     1  // DAC1 ADC channel
+#define SPI1_TX          11 // SPI1 TX
+#define SPI1_SCK         10 // SPI1 SCK
+#define SPI1_RX          8  // SPI1 RX
 
 #endif // PINDEFS_H
