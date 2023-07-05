@@ -21,6 +21,10 @@
 #define BASICDAC //test option; receiving any SPI transfer will give the DAC a setting
 #undef BASICDAC
 
+// Define SPI1_USE_HARDWARE to use the peripheral, otherwise SPI1 will be bit-banged
+//#define SPI1_USE_HARDWARE
+#undef SPI1_USE_HARDWARE
+
 // Initializing buffers
 #define BUF_LEN         0x04 // 4 bytes to trigger interrupt
 #define EMPTY_LEN       0x01 // single byte to clear buffer
@@ -84,21 +88,21 @@ struct dac_data_frame {
  * @note DAC SPI frames are reversed.
  */
 struct dac_config1_frame {
-    bool rw              : 1;
-    uint8_t address      : 7;
-    bool en_tmp_cal      : 1;
-    uint8_t reserved0    : 3;
-    uint8_t tnh_mask     : 2;
-    uint8_t reserved1    : 3;
-    bool ldac_mode       : 1;
-    bool fsdo            : 1;
-    bool enalmp          : 1;
-    bool dsdo            : 1;
-    bool fset            : 1;
-    uint8_t vrefval      : 4;
-    bool reserved2       : 1;
-    bool pdn             : 1;
-    uint8_t reserved3    : 4;
+    uint32_t reserved3  : 4;
+    uint32_t pdn        : 1;
+    uint32_t reserved2  : 1;
+    uint32_t vrefval    : 4;
+    uint32_t fset       : 1;
+    uint32_t dsdo       : 1;
+    uint32_t enalmp     : 1;
+    uint32_t fsdo       : 1;
+    uint32_t ldac_mode  : 1;
+    uint32_t reserved1  : 3;
+    uint32_t tnh_mask   : 2;
+    uint32_t reserved0  : 3;
+    uint32_t en_tmp_cal : 1;
+    uint32_t address    : 7;
+    uint32_t rw         : 1;
 };
 
 /** @brief DAC trigger frame
@@ -207,6 +211,37 @@ void onSpiInt(void)
     command_received = true; // Set the flag, will be processed by main loop.
 }
 
+int hwspi_write_blocking(const uint8_t *src, size_t len)
+{
+    return spi_write_blocking(spi1, src, len);
+}
+
+int swspi_write_blocking(const uint8_t *src, size_t len)
+{
+    // initial state
+    // for each byte:
+    //   for each bit:
+    //     set MOSI
+    //     clock low?
+    //     wait
+    //     clock high?
+    //     wait
+
+    for (int i = 0; i < len; i++) {
+        uint8_t byte = src[i];
+        for (int j = 0; j < 8; j++) {
+            gpio_put(SPI1_TX, byte & 0x80);
+            byte <<= 1;
+            gpio_put(SPI1_SCK, 1);
+            busy_wait_us(1);
+            gpio_put(SPI1_SCK, 0);
+            busy_wait_us(1);
+        }
+    }
+
+    return len;
+}
+
 int dac_send(uint cspin, union dac_data *data)
 {
     gpio_put(cspin, 0); // select DAC
@@ -215,7 +250,11 @@ int dac_send(uint cspin, union dac_data *data)
         data_frame_buf[i] = data->frame_buf[(BUF_LEN - 1) - i];
     }
     //gpio_put(cspin, 0); // select DAC
-    int nwritten = spi_write_blocking(spi1, data_frame_buf, DAC_LEN); // write the base config
+#ifdef SPI1_USE_HARDWARE
+    int nwritten = hwspi_write_blocking(spi1, data_frame_buf, DAC_LEN); // write the base config
+#else
+    int nwritten = swspi_write_blocking(data_frame_buf, DAC_LEN); // write the base config
+#endif
     gpio_put(cspin, 1); // deselect DAC
     return nwritten;
 }
@@ -224,7 +263,7 @@ int main(void)
 {
     stdio_init_all(); // for printf
 
-    sleep_ms(10000);
+    sleep_ms(3000);
 
     adc_init();
     //set up LED
@@ -420,6 +459,24 @@ uint32_t readADC(uint8_t id)
     }
 }
 
+void printbin(char *pref, uint8_t *data, uint32_t len)
+{
+    if (pref != NULL)
+        printf("  % 10s", pref);
+    for (int bi = 0; bi < len; bi++) {
+        printf("  %0d%0d%0d%0d %0d%0d%0d%0d",
+               (data[bi] & 0x80) >> 7,
+               (data[bi] & 0x40) >> 6,
+               (data[bi] & 0x20) >> 5,
+               (data[bi] & 0x10) >> 4,
+               (data[bi] & 0x08) >> 3,
+               (data[bi] & 0x04) >> 2,
+               (data[bi] & 0x02) >> 1,
+               (data[bi] & 0x01) >> 0);
+    }
+    putchar('\n');
+}
+
 /** @brief Initialize DACs
  * @return true if successful
  */
@@ -434,6 +491,61 @@ bool dacInit(void)
     gpio_set_dir(ALARM_DAC1, GPIO_IN);
 
     gpio_put(LDAC, 1); // set high, active low
+
+    for (int bi = 0; bi < 4; bi ++) {
+        printf("  %0d%0d%0d%0d %0d%0d%0d%0d",
+               (dac_config1_0.frame_buf[bi] & 0x80) >> 7,
+               (dac_config1_0.frame_buf[bi] & 0x40) >> 6,
+               (dac_config1_0.frame_buf[bi] & 0x20) >> 5,
+               (dac_config1_0.frame_buf[bi] & 0x10) >> 4,
+               (dac_config1_0.frame_buf[bi] & 0x08) >> 3,
+               (dac_config1_0.frame_buf[bi] & 0x04) >> 2,
+               (dac_config1_0.frame_buf[bi] & 0x02) >> 1,
+               (dac_config1_0.frame_buf[bi] & 0x01) >> 0);
+    }
+    putchar('\n');
+
+    // clear dac_config1_0
+    for (int i = 0; i < BUF_LEN; i++) {
+        dac_config1_0.frame_buf[i] = 0;
+    }
+    // for each bitfield, set field to all ones, print, set to zero
+#define SETPRINT(F, V) dac_config1_0.setting.F = V; printbin(#F, dac_config1_0.frame_buf, BUF_LEN); dac_config1_0.setting.F = 0;
+    SETPRINT(rw, 1);
+    SETPRINT(address, 0x7F);
+    SETPRINT(en_tmp_cal, 1);
+    SETPRINT(reserved0, 0x7);
+    SETPRINT(tnh_mask, 0x3);
+    SETPRINT(reserved1, 0x7);
+    SETPRINT(ldac_mode, 1);
+    SETPRINT(fsdo, 1);
+    SETPRINT(enalmp, 1);
+    SETPRINT(dsdo, 1);
+    SETPRINT(fset, 1);
+    SETPRINT(vrefval, 0xF);
+    SETPRINT(reserved2, 1);
+    SETPRINT(pdn, 1);
+    SETPRINT(reserved3, 0xF);
+#undef SETPRINT
+
+    /*
+    struct dac_config1_frame {
+    bool rw              : 1;
+    uint8_t address      : 7;
+    bool en_tmp_cal      : 1;
+    uint8_t reserved0    : 3;
+    uint8_t tnh_mask     : 2;
+    uint8_t reserved1    : 3;
+    bool ldac_mode       : 1;
+    bool fsdo            : 1;
+    bool enalmp          : 1;
+    bool dsdo            : 1;
+    bool fset            : 1;
+    uint8_t vrefval      : 4;
+    bool reserved2       : 1;
+    bool pdn             : 1;
+    uint8_t reserved3    : 4;
+};*/
 
     // initialize data frame
     dac_data_0.setting.rw = 0; // 0 to write
@@ -469,7 +581,7 @@ bool dacInit(void)
 
     // initialize trigger frame
     dac_trigger_0.setting.rw = 0; // 0 to write
-    dac_trigger_0.setting.rw = 0;
+    dac_trigger_1.setting.rw = 0;
     dac_trigger_0.setting.address = 0x04;
     dac_trigger_1.setting.address = 0x04;
     dac_trigger_0.setting.rcltemp = 0; // goes to 1 to initialize a temp calibration
@@ -479,21 +591,51 @@ bool dacInit(void)
     dac_trigger_0.setting.sclr = 0;
     dac_trigger_1.setting.sclr = 0;
 
+    printf("Config struct results: ");
+    printbuf(dac_config1_0.frame_buf, BUF_LEN);
+    printf("Desired results: ");
+    printbuf(config_frame_buf, BUF_LEN);
+
+    printf("%zu =? %zu\n", sizeof(struct dac_config1_frame), sizeof(union dac_config1));
+
+    printf("  rw         = %0X\n", dac_config1_0.setting.rw);
+    printf("  address    = %0X\n", dac_config1_0.setting.address);
+    printf("  en_tmp_cal = %0X\n", dac_config1_0.setting.en_tmp_cal);
+    printf("  reserved0  = %0X\n", dac_config1_0.setting.reserved0);
+    printf("  tnh_mask   = %0X\n", dac_config1_0.setting.tnh_mask);
+    printf("  reserved1  = %0X\n", dac_config1_0.setting.reserved1);
+    printf("  ldac_mode  = %0X\n", dac_config1_0.setting.ldac_mode);
+    printf("  fsdo       = %0X\n", dac_config1_0.setting.fsdo);
+    printf("  enalmp     = %0X\n", dac_config1_0.setting.enalmp);
+    printf("  dsdo       = %0X\n", dac_config1_0.setting.dsdo);
+    printf("  fset       = %0X\n", dac_config1_0.setting.fset);
+    printf("  vrefval    = %0X\n", dac_config1_0.setting.vrefval);
+    printf("  reserved2  = %0X\n", dac_config1_0.setting.reserved2);
+    printf("  pdn        = %0X\n", dac_config1_0.setting.pdn);
+    printf("  reserved3  = %0X\n", dac_config1_0.setting.reserved3);
+
     //now we start writing
     gpio_put(CS_DAC0, 0); // enable both!
     gpio_put(CS_DAC1, 0); // config matches anyways so no issue with this.
-    printf("Config struct results: ");
-    printbuf(dac_config1_0.frame_buf, BUF_LEN);
 
     //spi_write_blocking(spi1, dac_config1_0.frame_buf, DAC_LEN); //write the base config
-    int bytes_written = spi_write_blocking(spi1, config_frame_buf, DAC_LEN); // write the base config
-    printf("Desired results: ");
+    //int bytes_written = spi_write_blocking(spi1, config_frame_buf, DAC_LEN); // write the base config
+    // rotate bytes
+    for (int i = 0; i < BUF_LEN; i++) {
+        config_frame_buf[i] = dac_config1_0.frame_buf[DAC_LEN - i - 1];
+    }
+    printf("Wrote: ");
     printbuf(config_frame_buf, BUF_LEN);
+#ifdef SPI1_USE_HARDWARE
+    int bytes_written = hwspi_write_blocking(spi1, config_frame_buf, DAC_LEN); // write the base config
+#else
+    int bytes_written = swspi_write_blocking(config_frame_buf, DAC_LEN); // write the base config
+#endif
 
 
     gpio_put(CS_DAC0, 1); // disable both again
     gpio_put(CS_DAC1, 1);
-    printf("DACs enabled");
+    puts("DACs enabled");
 
     if (bytes_written != DAC_LEN) {
         printf("Error: %d bytes written, expected %d\n", bytes_written, DAC_LEN);
@@ -501,6 +643,65 @@ bool dacInit(void)
     }
 
     return true;
+}
+
+/** @brief Initialize System SPI
+ */
+void spiSysInit(void)
+{
+    // Enable SPI 0 at 4 MHz and connect to GPIOs
+    uint spi0_baud = 1 * 1000 * 1000;
+    spi_init(spi0, spi0_baud);
+    spi_set_format(spi0, 8, SPI_CPOL_0, SPI_CPHA_1, SPI_MSB_FIRST); // configure SPH = 1 for proper behavior with DAC
+    spi_set_slave(spi0, true);
+    gpio_set_function(4, GPIO_FUNC_SPI); // RX
+    gpio_set_function(6, GPIO_FUNC_SPI); // SCK
+    gpio_set_function(7, GPIO_FUNC_SPI); // TX
+    gpio_set_function(5, GPIO_FUNC_SPI); // CSN
+    // Make the SPI pins available to picotool
+    bi_decl(bi_4pins_with_func(4, 7, 6, 5, GPIO_FUNC_SPI));
+
+    // creating an interrupt on SPI0 buffer filling up
+    irq_add_shared_handler(SPI0_IRQ, onSpiInt, 1);
+    irq_set_enabled(SPI0_IRQ, true);
+    // enabling the masking for the RX int
+    *((io_rw_32 *) (SPI0_BASE + SPI_SSPIMSC_OFFSET))=(1<<2);
+}
+
+/** @brief Initialize DAC SPI (HW driver)
+ */
+void spiDacHwInit(void)
+{
+    // now we set up SPI1 as master.
+    uint spi1_baud = 1 * 1000 * 100;
+    spi_init(spi1, spi1_baud);
+    spi_set_format(spi1, 8, SPI_CPOL_0, SPI_CPHA_1, SPI_MSB_FIRST); // configure SPH = 1 for proper behavior with DAC
+    //hw_write_masked(&spi_get_hw(spi1)->cr0, ((uint)1 << SPI_SSPCR0_FRF_LSB), SPI_SSPCR0_FRF_BITS); // TI frame format
+    gpio_set_function(8,  GPIO_FUNC_SPI); // RX, 16
+    gpio_set_function(10, GPIO_FUNC_SPI); // SCK, 18
+    gpio_set_function(11, GPIO_FUNC_SPI); // TX, 19
+    // Make the SPI pins available to picotool
+    bi_decl(bi_3pins_with_func(8, 11, 10, GPIO_FUNC_SPI));
+}
+
+/** @brief Initialize DAC SPI (SW driver)
+ */
+void spiDacSwInit(void)
+{
+    gpio_set_function(SPI1_RX,  GPIO_FUNC_NULL); // RX, 16
+    gpio_set_function(SPI1_SCK, GPIO_FUNC_NULL); // SCK, 18
+    gpio_set_function(11, GPIO_FUNC_NULL); // TX, 19
+
+    gpio_init(SPI1_RX); // RX, 16
+    gpio_init(SPI1_SCK); // SCK, 18
+    gpio_init(SPI1_TX); // TX, 19
+
+    gpio_set_dir(SPI1_RX, GPIO_IN);
+    gpio_set_dir(SPI1_SCK, GPIO_OUT);
+    gpio_set_dir(SPI1_TX, GPIO_OUT);
+
+    gpio_put(SPI1_SCK, 0);
+    gpio_put(SPI1_TX, 0);
 }
 
 /** @brief Initialize SPI
@@ -516,32 +717,13 @@ void spiInit(void)
     gpio_put(CS_DAC1, 1);
 
     printf("Initializing SPI\n");
-    // Enable SPI 0 at 4 MHz and connect to GPIOs
-    spi_init(spi0, 1 * 1000 * 1000);
-    spi_set_format(spi0, 8, SPI_CPOL_0, SPI_CPHA_1, SPI_MSB_FIRST); // configure SPH = 1 for proper behavior with DAC
-    spi_set_slave(spi0, true);
-    gpio_set_function(4, GPIO_FUNC_SPI); // RX
-    gpio_set_function(6, GPIO_FUNC_SPI); // SCK
-    gpio_set_function(7, GPIO_FUNC_SPI); // TX
-    gpio_set_function(5, GPIO_FUNC_SPI); // CSN
-    // Make the SPI pins available to picotool
-    bi_decl(bi_4pins_with_func(4, 7, 6, 5, GPIO_FUNC_SPI));
+    spiSysInit();
 
-    // creating an interrupt on SPI0 buffer filling up
-    irq_add_shared_handler(SPI0_IRQ, onSpiInt, 1);
-    irq_set_enabled(SPI0_IRQ, true);
-    // enabling the masking for the RX int
-    *((io_rw_32 *) (SPI0_BASE + SPI_SSPIMSC_OFFSET))=(1<<2);
-
-    // now we set up SPI1 as master.
-    spi_init(spi1, 1 * 1000 * 1000);
-    spi_set_format(spi1, 8, SPI_CPOL_0, SPI_CPHA_1, SPI_MSB_FIRST); // configure SPH = 1 for proper behavior with DAC
-    gpio_set_function(8,  GPIO_FUNC_SPI); // RX, 16
-    gpio_set_function(10, GPIO_FUNC_SPI); // SCK, 18
-    gpio_set_function(11, GPIO_FUNC_SPI); // TX, 19
-    // Make the SPI pins available to picotool
-    bi_decl(bi_3pins_with_func(8, 11, 10, GPIO_FUNC_SPI));
-
+#ifdef SPI1_USE_HARDWARE
+    spiDacHwInit();
+#else
+    spiDacSwInit();
+#endif
 }
 
 /** @brief Print a buffer in hex (debug)
