@@ -25,6 +25,9 @@
 //#define SPI1_USE_HARDWARE
 #undef SPI1_USE_HARDWARE
 
+// Define SPI1_VERIFY_WRITES to read-back writed to the DAC
+#undef SPI1_VERIFY_WRITES
+
 // Initializing buffers
 #define BUF_LEN         0x04 // 4 bytes to trigger interrupt
 #define EMPTY_LEN       0x01 // single byte to clear buffer
@@ -264,6 +267,7 @@ int swspi1_readwrite_blocking(const uint8_t *src, uint8_t *dst, size_t length)
     return length;
 }
 
+/*
 int dac_send(uint cspin, union dac_data *data)
 {
     gpio_put(cspin, 0); // select DAC
@@ -280,8 +284,9 @@ int dac_send(uint cspin, union dac_data *data)
     gpio_put(cspin, 1); // deselect DAC
     return nwritten;
 }
+*/
 
-int dac_send_verify(uint cspin, union dac_data *data)
+int dac_send(uint cspin, union dac_data *data)
 {
     gpio_put(cspin, 0); // select DAC
     // send in reverse order
@@ -296,6 +301,7 @@ int dac_send_verify(uint cspin, union dac_data *data)
 #endif
     gpio_put(cspin, 1); // deselect DAC
 
+#ifdef SPI1_VERIFY_WRITES
     printf("Wrote: ");
     printbuf(data_frame_buf, DAC_LEN);
 
@@ -317,6 +323,7 @@ int dac_send_verify(uint cspin, union dac_data *data)
     printbuf(data_frame_buf, DAC_LEN);
     printf("Read:  ");
     printbuf(dac_data_verify.frame_buf, DAC_LEN);
+#endif
 
     return nwritten;
 }
@@ -406,14 +413,14 @@ int main(void)
                     gpio_put(ACK, 1); // Acknowledge command
                     puts("sending to DAC0");
                     //gpio_put(CS_DAC0, 0); // select DAC0
-                    bytes_sent = dac_send_verify(CS_DAC0, &dac_data_0);
+                    bytes_sent = dac_send(CS_DAC0, &dac_data_0);
                     //gpio_put(CS_DAC0, 1); // deselect DAC0
                     break;
                 case 1: // DAC1
                     gpio_put(ACK, 1); // Acknowledge command
                     puts("sending to DAC1");
                     //gpio_put(CS_DAC1, 0); // select DAC1
-                    bytes_sent = dac_send_verify(CS_DAC1, &dac_data_1);
+                    bytes_sent = dac_send(CS_DAC1, &dac_data_1);
                     //gpio_put(CS_DAC1, 1); // deselect DAC1
                     break;
                 default:
@@ -787,6 +794,21 @@ bool dacInit(void)
     printbuf(dac_config1_0_verify1.frame_buf, BUF_LEN);
     printf("      ");
     printbuf(dac_config1_0_verify2.frame_buf, BUF_LEN);
+
+    // now set to zero
+    // dac_data_x set above
+    // DAC 0
+    bytes_written = dac_send(CS_DAC0, &dac_data_0);
+    if (bytes_written != DAC_LEN) {
+        printf("Error: %d bytes written, expected %d\n", bytes_written, DAC_LEN);
+        return false;
+    }
+    // DAC 1
+    bytes_written = dac_send(CS_DAC1, &dac_data_1);
+    if (bytes_written != DAC_LEN) {
+        printf("Error: %d bytes written, expected %d\n", bytes_written, DAC_LEN);
+        return false;
+    }
 
     // set up verification structures
 
