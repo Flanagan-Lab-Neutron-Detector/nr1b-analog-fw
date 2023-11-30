@@ -169,8 +169,8 @@ uint8_t config_frame_buf[BUF_LEN] = {
 
 // Comms globals
 
-union dac_data dac_data_0, dac_data_1;
-union dac_config1 dac_config1_0, dac_config1_1;
+union dac_data dac_data_0, dac_data_1, dac_data_verify, dac_data_read;
+union dac_config1 dac_config1_0, dac_config1_1, dac_config1_0_verify1, dac_config1_0_verify2;
 union dac_trigger dac_trigger_0, dac_trigger_1;
 
 union analog_set_data sys_analog_set;
@@ -211,12 +211,12 @@ void onSpiInt(void)
     command_received = true; // Set the flag, will be processed by main loop.
 }
 
-int hwspi_write_blocking(const uint8_t *src, size_t len)
+int hwspi1_write_blocking(const uint8_t *src, size_t len)
 {
     return spi_write_blocking(spi1, src, len);
 }
 
-int swspi_write_blocking(const uint8_t *src, size_t len)
+int swspi1_write_blocking(const uint8_t *src, size_t len)
 {
     // initial state
     // for each byte:
@@ -242,6 +242,28 @@ int swspi_write_blocking(const uint8_t *src, size_t len)
     return len;
 }
 
+int swspi1_readwrite_blocking(const uint8_t *src, uint8_t *dst, size_t length)
+{
+    // like swspi1_write_blocking, but on each falling edge of SPI1_SCK, read from SPI1_RX
+
+    for (int i = 0; i < length; i++) {
+        uint8_t byte = src[i];
+        // dst[i] is 8 bits and we shift in 8 bits, so no need to clear
+        for (int j = 0; j < 8; j++) {
+            gpio_put(SPI1_TX, byte & 0x80);
+            byte <<= 1;
+            gpio_put(SPI1_SCK, 1);
+            busy_wait_us(1);
+            dst[i] <<= 1;
+            dst[i] |= (((uint)gpio_get(SPI1_RX)) & 0x01);
+            gpio_put(SPI1_SCK, 0);
+            busy_wait_us(1);
+        }
+    }
+
+    return length;
+}
+
 int dac_send(uint cspin, union dac_data *data)
 {
     gpio_put(cspin, 0); // select DAC
@@ -251,11 +273,51 @@ int dac_send(uint cspin, union dac_data *data)
     }
     //gpio_put(cspin, 0); // select DAC
 #ifdef SPI1_USE_HARDWARE
-    int nwritten = hwspi_write_blocking(spi1, data_frame_buf, DAC_LEN); // write the base config
+    int nwritten = hwspi1_write_blocking(spi1, data_frame_buf, DAC_LEN); // write the base config
 #else
-    int nwritten = swspi_write_blocking(data_frame_buf, DAC_LEN); // write the base config
+    int nwritten = swspi1_write_blocking(data_frame_buf, DAC_LEN); // write the base config
 #endif
     gpio_put(cspin, 1); // deselect DAC
+    return nwritten;
+}
+
+int dac_send_verify(uint cspin, union dac_data *data)
+{
+    gpio_put(cspin, 0); // select DAC
+    // send in reverse order
+    for(int i = 0; i < BUF_LEN; i++) {
+        data_frame_buf[i] = data->frame_buf[(BUF_LEN - 1) - i];
+    }
+    //gpio_put(cspin, 0); // select DAC
+#ifdef SPI1_USE_HARDWARE
+    int nwritten = hwspi1_write_blocking(spi1, data_frame_buf, DAC_LEN); // write the base config
+#else
+    int nwritten = swspi1_write_blocking(data_frame_buf, DAC_LEN); // write the base config
+#endif
+    gpio_put(cspin, 1); // deselect DAC
+
+    printf("Wrote: ");
+    printbuf(data_frame_buf, DAC_LEN);
+
+    // read back
+    gpio_put(cspin, 0); // select DAC
+    // send in reverse order
+    for(int i = 0; i < BUF_LEN; i++) {
+        data_frame_buf[i] = dac_data_read.frame_buf[(BUF_LEN - 1) - i];
+    }
+    //gpio_put(cspin, 0); // select DAC
+#ifdef SPI1_USE_HARDWARE
+    hwspi1_readwrite_blocking(spi1, data_frame_buf, DAC_LEN); // write the base config
+#else
+    swspi1_readwrite_blocking(data_frame_buf, dac_data_verify.frame_buf, DAC_LEN); // write the base config
+#endif
+    gpio_put(cspin, 1); // deselect DAC
+
+    printf("Wrote: ");
+    printbuf(data_frame_buf, DAC_LEN);
+    printf("Read:  ");
+    printbuf(dac_data_verify.frame_buf, DAC_LEN);
+
     return nwritten;
 }
 
@@ -269,6 +331,21 @@ int main(void)
     //set up LED
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+    gpio_put(PICO_DEFAULT_LED_PIN, 1);
+
+    // test points
+    gpio_init(TP1);
+    gpio_init(TP2);
+    gpio_init(TP3);
+    gpio_init(TP4);
+    gpio_set_dir(TP1, GPIO_OUT);
+    gpio_set_dir(TP2, GPIO_OUT);
+    gpio_set_dir(TP3, GPIO_OUT);
+    gpio_set_dir(TP4, GPIO_OUT);
+    gpio_put(TP1, 0);
+    gpio_put(TP2, 0);
+    gpio_put(TP3, 0);
+    gpio_put(TP4, 0);
 
     //status indication
     gpio_init(ACK);
@@ -327,14 +404,16 @@ int main(void)
             switch (selected_dac) {
                 case 0: // DAC0
                     gpio_put(ACK, 1); // Acknowledge command
+                    puts("sending to DAC0");
                     //gpio_put(CS_DAC0, 0); // select DAC0
-                    bytes_sent = dac_send(CS_DAC0, &dac_data_0);
+                    bytes_sent = dac_send_verify(CS_DAC0, &dac_data_0);
                     //gpio_put(CS_DAC0, 1); // deselect DAC0
                     break;
                 case 1: // DAC1
                     gpio_put(ACK, 1); // Acknowledge command
+                    puts("sending to DAC1");
                     //gpio_put(CS_DAC1, 0); // select DAC1
-                    bytes_sent = dac_send(CS_DAC1, &dac_data_1);
+                    bytes_sent = dac_send_verify(CS_DAC1, &dac_data_1);
                     //gpio_put(CS_DAC1, 1); // deselect DAC1
                     break;
                 default:
@@ -505,7 +584,7 @@ bool dacInit(void)
     }
     putchar('\n');
 
-    // clear dac_config1_0
+    // clear dac_config1_0 and dac_config1_0_verify
     for (int i = 0; i < BUF_LEN; i++) {
         dac_config1_0.frame_buf[i] = 0;
     }
@@ -560,8 +639,8 @@ bool dacInit(void)
     dac_config1_1.setting.rw = 0;
     dac_config1_0.setting.address = 0x02;
     dac_config1_1.setting.address = 0x02;
-    dac_config1_0.setting.en_tmp_cal = 1; // make temperature calibration available
-    dac_config1_1.setting.en_tmp_cal = 1;
+    dac_config1_0.setting.en_tmp_cal = 0; // do not make temperature calibration available
+    dac_config1_1.setting.en_tmp_cal = 0;
     dac_config1_0.setting.tnh_mask = 00; // default mask for track-and-hold deglitcher
     dac_config1_1.setting.tnh_mask = 00;
     dac_config1_0.setting.ldac_mode = 0; // use the LDAC input to trigger change
@@ -627,9 +706,9 @@ bool dacInit(void)
     printf("Wrote: ");
     printbuf(config_frame_buf, BUF_LEN);
 #ifdef SPI1_USE_HARDWARE
-    int bytes_written = hwspi_write_blocking(spi1, config_frame_buf, DAC_LEN); // write the base config
+    int bytes_written = hwspi1_write_blocking(spi1, config_frame_buf, DAC_LEN); // write the base config
 #else
-    int bytes_written = swspi_write_blocking(config_frame_buf, DAC_LEN); // write the base config
+    int bytes_written = swspi1_write_blocking(config_frame_buf, DAC_LEN); // write the base config
 #endif
 
 
@@ -641,6 +720,84 @@ bool dacInit(void)
         printf("Error: %d bytes written, expected %d\n", bytes_written, DAC_LEN);
         return false;
     }
+
+    // now read back the config
+
+    // read into dac_config1_0_verify, which is already zeroed
+    // use dac_config1_0 for read command (set rw)
+    for (int i = 0; i < BUF_LEN; i++) {
+        dac_config1_0.frame_buf[i] = 0;
+        dac_config1_0_verify1.frame_buf[i] = 0;
+        dac_config1_0_verify2.frame_buf[i] = 0;
+    }
+    dac_config1_0.setting.rw = 1; // set read bit
+    dac_config1_0.setting.address = 0x02;
+    // rotate bytes
+    for (int i = 0; i < BUF_LEN; i++) {
+        config_frame_buf[i] = dac_config1_0.frame_buf[DAC_LEN - i - 1];
+    }
+    printf("Wrote: ");
+    printbuf(config_frame_buf, BUF_LEN);
+
+    // signal to LA
+    gpio_put(TP1, 1);
+    gpio_put(TP2, 1);
+
+    gpio_put(CS_DAC0, 0); // enable
+#ifdef SPI1_USE_HARDWARE
+    hwspi1_readwrite_blocking(spi1, config_frame_buf, dac_config1_0_verify1.frame_buf, DAC_LEN);
+#else
+    swspi1_readwrite_blocking(config_frame_buf, dac_config1_0_verify1.frame_buf, DAC_LEN);
+#endif
+    gpio_put(CS_DAC0, 1); // disable
+
+    // done with first word
+    gpio_put(TP2, 0);
+
+    // send nop and read
+    for (int i = 0; i < BUF_LEN; i++) {
+        dac_config1_0.frame_buf[i] = 0;
+    }
+    // nop
+    dac_config1_0.setting.rw = 0; // set read bit
+    dac_config1_0.setting.address = 0x00;
+    // rotate bytes
+    for (int i = 0; i < BUF_LEN; i++) {
+        config_frame_buf[i] = dac_config1_0.frame_buf[DAC_LEN - i - 1];
+    }
+    printf("Wrote: ");
+    printbuf(config_frame_buf, BUF_LEN);
+
+    // second word
+    gpio_put(TP3, 1);
+
+    gpio_put(CS_DAC0, 0); // enable
+#ifdef SPI1_USE_HARDWARE
+    hwspi1_readwrite_blocking(spi1, config_frame_buf, dac_config1_0_verify2.frame_buf, DAC_LEN);
+#else
+    swspi1_readwrite_blocking(config_frame_buf, dac_config1_0_verify2.frame_buf, DAC_LEN);
+#endif
+    gpio_put(CS_DAC0, 1); // disable
+
+    // done
+    gpio_put(TP3, 0);
+    gpio_put(TP1, 0);
+
+    printf("Read: ");
+    printbuf(dac_config1_0_verify1.frame_buf, BUF_LEN);
+    printf("      ");
+    printbuf(dac_config1_0_verify2.frame_buf, BUF_LEN);
+
+    // set up verification structures
+
+    // clear
+    for (uint32_t i=0; i<DAC_LEN; i++) {
+        dac_data_verify.frame_buf[i] = 0;
+        dac_data_read.frame_buf[i] = 0;
+    }
+    // set up read
+    dac_data_read.setting.rw = 1;
+    dac_data_read.setting.address = 0x01;
 
     return true;
 }

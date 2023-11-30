@@ -22,5 +22,9 @@
 #define SPI1_TX          11 // SPI1 TX
 #define SPI1_SCK         10 // SPI1 SCK
 #define SPI1_RX          8  // SPI1 RX
+#define TP1              16
+#define TP2              17
+#define TP3              22
+#define TP4              28
 
 #endif // PINDEFS_H
