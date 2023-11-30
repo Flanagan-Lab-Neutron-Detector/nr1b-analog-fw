@@ -410,18 +410,18 @@ int main(void)
             int bytes_sent = 0;
             switch (selected_dac) {
                 case 0: // DAC0
-                    gpio_put(ACK, 1); // Acknowledge command
                     puts("sending to DAC0");
                     //gpio_put(CS_DAC0, 0); // select DAC0
                     bytes_sent = dac_send(CS_DAC0, &dac_data_0);
                     //gpio_put(CS_DAC0, 1); // deselect DAC0
+                    gpio_put(ACK, 1); // Acknowledge command
                     break;
                 case 1: // DAC1
-                    gpio_put(ACK, 1); // Acknowledge command
                     puts("sending to DAC1");
                     //gpio_put(CS_DAC1, 0); // select DAC1
                     bytes_sent = dac_send(CS_DAC1, &dac_data_1);
                     //gpio_put(CS_DAC1, 1); // deselect DAC1
+                    gpio_put(ACK, 1); // Acknowledge command
                     break;
                 default:
                     break;
