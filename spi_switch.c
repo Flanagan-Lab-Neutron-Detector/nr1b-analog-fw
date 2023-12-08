@@ -432,7 +432,7 @@ int main(void)
             command_pending = false; // clear flag
         }
 
-        sleep_ms(100);
+        sleep_us(100);
     }
 
     return 0;
