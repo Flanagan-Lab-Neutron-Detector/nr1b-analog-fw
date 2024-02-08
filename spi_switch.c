@@ -332,7 +332,7 @@ int main(void)
 {
     stdio_init_all(); // for printf
 
-    sleep_ms(3000);
+    sleep_ms(100);
 
     adc_init();
     //set up LED
