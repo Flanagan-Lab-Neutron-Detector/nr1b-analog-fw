@@ -19,8 +19,9 @@ if (PICO_SDK_VERSION_STRING VERSION_LESS "1.3.0")
 endif()
 
 add_executable(spi_switch
-        spi_switch.c
-        )
+        src/spi_switch.c
+        src/pindefs.h
+)
 
 add_compile_options(-Wall -Wextra)
 
