@@ -1,4 +1,4 @@
-/** @file spi_switch.c
+/** @file main.c
  * @brief Main file for analog controller
  * 
  * @authors Isaac Kelly, Aidan Medcalf
