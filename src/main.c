@@ -42,7 +42,8 @@
 #define EMPTY_LEN       0x01 // single byte to clear buffer
 #define DAC_LEN         0x04 // always 4 bytes, 32 bits
 
-uint8_t in_sys_buf[BUF_LEN], out_sys_buf[BUF_LEN], in_dac_buf[BUF_LEN], out_dac_buf[BUF_LEN], in_command_buf[BUF_LEN];
+uint8_t in_sys_buf[BUF_LEN], out_sys_buf[BUF_LEN], in_dac_buf[BUF_LEN], out_dac_buf[BUF_LEN];
+//uint8_t in_command_buf[BUF_LEN];
 uint8_t empty_buf, null_buf[EMPTY_LEN];//for flushing buffers
 
 enum spi_command {
@@ -171,6 +172,13 @@ union analog_get_data {
     uint8_t frame_buf[BUF_LEN];
 };
 
+union spi_command_data {
+    struct analog_set_frame analog_set;
+    struct analog_get_frame analog_get;
+    struct reset_frame      reset;
+    uint8_t frame_buf[BUF_LEN];
+};
+
 // Pre-set buffers
 
 uint8_t data_frame_buf[BUF_LEN] = {
@@ -193,19 +201,12 @@ union dac_data dac_data_0, dac_data_1, dac_data_verify, dac_data_read;
 union dac_config1 dac_config1_0, dac_config1_1, dac_config1_0_verify1, dac_config1_0_verify2;
 union dac_trigger dac_trigger_0, dac_trigger_1;
 
-union analog_set_data sys_analog_set;
-union reset_data sys_reset;
 union analog_get_data sys_analog_get;
 
 // Main loop globals
+volatile bool command_received = false;
 
-bool command_received = false;
-bool reply_pending = false;
-bool command_pending = false;
-uint8_t selected_dac = 0;
-
-
-bool parseCommand(void);
+void handleCommand(union spi_command_data *command_data);
 bool generate_parity(uint8_t frame[DAC_LEN]);
 void spiInit(void);
 void printbuf(uint8_t *buf, size_t len);
@@ -230,11 +231,21 @@ void onSpiInt(void)
     command_received = true; // Set the flag, will be processed by main loop.
 }
 
+/** @brief Write to SPI1 hardware peripheral (see @ref spi_write_blocking)
+ * @param src data to write
+ * @param len length of data
+ * @return number of bytes written
+ */
 int hwspi1_write_blocking(const uint8_t *src, size_t len)
 {
     return spi_write_blocking(spi1, src, len);
 }
 
+/** @brief@rite to SPI1 in software
+ * @param src data to write
+ * @param len length of data
+ * @return number of bytes written
+ */
 int swspi1_write_blocking(const uint8_t *src, size_t len)
 {
     // initial state
@@ -261,6 +272,12 @@ int swspi1_write_blocking(const uint8_t *src, size_t len)
     return len;
 }
 
+/** @brief Read/write SPI1 in software
+ * @param src buffer to write
+ * @param dst buffer to read into
+ * @param length length of data
+ * @return number of bytes read
+ */
 int swspi1_readwrite_blocking(const uint8_t *src, uint8_t *dst, size_t length)
 {
     // like swspi1_write_blocking, but on each falling edge of SPI1_SCK, read from SPI1_RX
@@ -283,14 +300,19 @@ int swspi1_readwrite_blocking(const uint8_t *src, uint8_t *dst, size_t length)
     return length;
 }
 
-int dac_send(uint cspin, union dac_data *data)
+/** @brief Write data to DACs
+ * @param cspin selected DAC CS pin
+ * @param data data to write
+ * @return number of bytes written
+ * @note If @ref SPI1_VERIFY_WRITES is defined, reads back data and prints to console
+ */
+int dac_write(uint cspin, union dac_data *data)
 {
     gpio_put(cspin, 0); // select DAC
     // send in reverse order
     for(int i = 0; i < BUF_LEN; i++) {
         data_frame_buf[i] = data->frame_buf[(BUF_LEN - 1) - i];
     }
-    //gpio_put(cspin, 0); // select DAC
 #ifdef SPI1_USE_HARDWARE
     int nwritten = hwspi1_write_blocking(spi1, data_frame_buf, DAC_LEN); // write the base config
 #else
@@ -308,7 +330,6 @@ int dac_send(uint cspin, union dac_data *data)
     for(int i = 0; i < BUF_LEN; i++) {
         data_frame_buf[i] = dac_data_read.frame_buf[(BUF_LEN - 1) - i];
     }
-    //gpio_put(cspin, 0); // select DAC
 #ifdef SPI1_USE_HARDWARE
     hwspi1_readwrite_blocking(spi1, data_frame_buf, DAC_LEN); // write the base config
 #else
@@ -323,6 +344,31 @@ int dac_send(uint cspin, union dac_data *data)
 #endif
 
     return nwritten;
+}
+
+int dac_send(int dac, union dac_data *data)
+{
+    int bytes_sent = 0;
+    switch (dac) {
+        case 0:
+            puts("sending to DAC0");
+            bytes_sent = dac_write(CS_DAC0, data);
+            gpio_put(ACK, 1); // Acknowledge command
+            break;
+        case 1:
+            puts("sending to DAC1");
+            bytes_sent = dac_write(CS_DAC1, data);
+            gpio_put(ACK, 1); // Acknowledge command
+            break;
+        default:
+            puts("invalid DAC");
+            gpio_put(ERROR, 1); // indicate error
+            break;
+    }
+    if (bytes_sent != DAC_LEN) {
+        gpio_put(ERROR, 1); // indicate error
+    }
+    return bytes_sent;
 }
 
 int main(void)
@@ -379,15 +425,12 @@ int main(void)
         // Service flags
 
         if (command_received) { // we have a command to process
-            memcpy(in_command_buf, in_sys_buf, BUF_LEN); // in_sys_buf is written to by ISR
+            union spi_command_data in_command_data;
+            memcpy(in_command_data.frame_buf, in_sys_buf, BUF_LEN); // in_sys_buf is written to by ISR
             command_received = false; // clear flag
 
             // parse command, verify, interpret, choose next step.
-            command_pending = parseCommand();
-        }
-
-        if (reply_pending) { // need to send data back to controller
-            spi_write_read_blocking(spi0, out_sys_buf, in_sys_buf, BUF_LEN); // write DAC response, get new command
+            handleCommand(&in_command_data);
         }
 
         /*command_pending = true;
@@ -403,28 +446,6 @@ int main(void)
                 break;
         }*/
 
-        if (command_pending) { // we need to send something out to DAC
-            int bytes_sent = 0;
-            switch (selected_dac) {
-                case 0: // DAC0
-                    puts("sending to DAC0");
-                    bytes_sent = dac_send(CS_DAC0, &dac_data_0);
-                    gpio_put(ACK, 1); // Acknowledge command
-                    break;
-                case 1: // DAC1
-                    puts("sending to DAC1");
-                    bytes_sent = dac_send(CS_DAC1, &dac_data_1);
-                    gpio_put(ACK, 1); // Acknowledge command
-                    break;
-                default:
-                    break;
-            }
-            if (bytes_sent != DAC_LEN) {
-                gpio_put(ERROR, 1); // indicate error
-            }
-            command_pending = false; // clear flag
-        }
-
         sleep_us(100);
     }
 
@@ -434,51 +455,47 @@ int main(void)
 /** @brief Parse command from controller
  * @return true if main loop has a command to process
  */
-bool parseCommand(void)
+void handleCommand(union spi_command_data *command_data)
 {
-    // Check parity
-    if (generate_parity(in_command_buf)) {
-        // TODO: assert error pin
-        printf("Bad parity: %d\n", generate_parity(in_command_buf));
-        printbuf(in_command_buf, BUF_LEN);
-        return false; //if checksum isn't valid, break it out.
-    }
-
-    // Decode address (command)
-    switch((enum spi_command)((in_command_buf[0] >> 1) & 0x0F)) { //gets the 4 bits which define our address
-        case CMD_DAC0_SET:// DAC0 SET
-            memcpy(sys_analog_set.frame_buf, in_command_buf, BUF_LEN);
-            dac_data_0.setting.dac_setting = sys_analog_set.setting.dac_counts;
-            //printf("dac_data_0 setting = %d*%.1f = %d\n", sys_analog_set.setting.dac_counts, dac0_scale, dac_data_0.setting.dac_setting);
-            selected_dac = 0;
-            return true; // we have a command to process
-
-        case CMD_DAC1_SET: // DAC1 SET
-            memcpy(sys_analog_set.frame_buf, in_command_buf, BUF_LEN);
-            dac_data_1.setting.dac_setting = sys_analog_set.setting.dac_counts;
-            //printf("dac_data_1 setting = %d*%.1f = %d\n", sys_analog_set.setting.dac_counts, dac1_scale, dac_data_1.setting.dac_setting);
-            selected_dac = 1;
-            return true; // we have a command to process
-
-        case CMD_RESET: // RESET TODO
-            return true; // we have a command to process
-
-        case CMD_ADC0_GET: // ADC0 GET
-            sys_analog_get.setting.adc_counts = last_adc0;
-            sys_analog_get.setting.checksum = 0;
-            sys_analog_get.setting.checksum = generate_parity(sys_analog_get.frame_buf);
-            memcpy(out_sys_buf, sys_analog_get.frame_buf, BUF_LEN);
-            reply_pending = 1;
-            return false; // no command
-
-        case CMD_ADC1_GET: // ADC1 GET
-            sys_analog_get.setting.adc_counts = last_adc1;
-            memcpy(out_sys_buf, sys_analog_get.frame_buf, BUF_LEN);
-            reply_pending = 1;
-            return false; // no command
-
-        default:
-            return false; // no command
+    // Verify parity
+    bool cmd_parity = generate_parity(command_data->frame_buf);
+    if (cmd_parity) {
+        printf("Bad parity: %d\n", cmd_parity);
+        printbuf(command_data->frame_buf, BUF_LEN);
+        gpio_put(ERROR, 1); // indicate error
+    } else {
+        // Decode address (command)
+        switch((enum spi_command)((command_data->frame_buf[0] >> 1) & 0x0F)) { //gets the 4 bits which define our address
+            case CMD_DAC0_SET:
+                dac_data_0.setting.dac_setting = command_data->analog_set.dac_counts;
+                //printf("dac_data_0 setting = %d*%.1f = %d\n", sys_analog_set.setting.dac_counts, dac0_scale, dac_data_0.setting.dac_setting);
+                dac_send(0, &dac_data_0);
+                break;
+            case CMD_DAC1_SET:
+                dac_data_1.setting.dac_setting = command_data->analog_set.dac_counts;
+                //printf("dac_data_1 setting = %d*%.1f = %d\n", sys_analog_set.setting.dac_counts, dac1_scale, dac_data_1.setting.dac_setting);
+                dac_send(1, &dac_data_1);
+                break;
+            case CMD_RESET:
+                // TODO
+                break;
+            case CMD_ADC0_GET:
+                sys_analog_get.setting.adc_counts = last_adc0;
+                sys_analog_get.setting.checksum = 0;
+                sys_analog_get.setting.checksum = generate_parity(sys_analog_get.frame_buf);
+                memcpy(out_sys_buf, sys_analog_get.frame_buf, BUF_LEN);
+                spi_write_read_blocking(spi0, out_sys_buf, in_sys_buf, BUF_LEN); // write DAC response, get new command
+                break;
+            case CMD_ADC1_GET:
+                sys_analog_get.setting.adc_counts = last_adc1;
+                sys_analog_get.setting.checksum = 0;
+                sys_analog_get.setting.checksum = generate_parity(sys_analog_get.frame_buf);
+                memcpy(out_sys_buf, sys_analog_get.frame_buf, BUF_LEN);
+                spi_write_read_blocking(spi0, out_sys_buf, in_sys_buf, BUF_LEN); // write DAC response, get new command
+                break;
+            default:
+                break;
+        }
     }
 }
 
@@ -651,8 +668,6 @@ bool dacInit(void)
     gpio_put(CS_DAC0, 0); // enable both!
     gpio_put(CS_DAC1, 0); // config matches anyways so no issue with this.
 
-    //spi_write_blocking(spi1, dac_config1_0.frame_buf, DAC_LEN); //write the base config
-    //int bytes_written = spi_write_blocking(spi1, config_frame_buf, DAC_LEN); // write the base config
     // rotate bytes
     for (int i = 0; i < BUF_LEN; i++) {
         config_frame_buf[i] = dac_config1_0.frame_buf[DAC_LEN - i - 1];
@@ -745,13 +760,13 @@ bool dacInit(void)
     // now set to zero
     // dac_data_x set above
     // DAC 0
-    bytes_written = dac_send(CS_DAC0, &dac_data_0);
+    bytes_written = dac_write(CS_DAC0, &dac_data_0);
     if (bytes_written != DAC_LEN) {
         printf("Error: %d bytes written, expected %d\n", bytes_written, DAC_LEN);
         return false;
     }
     // DAC 1
-    bytes_written = dac_send(CS_DAC1, &dac_data_1);
+    bytes_written = dac_write(CS_DAC1, &dac_data_1);
     if (bytes_written != DAC_LEN) {
         printf("Error: %d bytes written, expected %d\n", bytes_written, DAC_LEN);
         return false;
