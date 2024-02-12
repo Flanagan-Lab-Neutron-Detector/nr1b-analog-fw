@@ -30,12 +30,14 @@
 // application libraries
 #include "pindefs.h"
 
-// Define SPI1_USE_HARDWARE to use the peripheral, otherwise SPI1 will be bit-banged
-//#define SPI1_USE_HARDWARE
-#undef SPI1_USE_HARDWARE
-
-// Define SPI1_VERIFY_WRITES to read-back writed to the DAC
-#undef SPI1_VERIFY_WRITES
+// Diagnostics
+#ifdef PRINT_DIAGNOSTICS
+#define diag_puts(s) puts(s)
+#define diag_printf(...) printf(__VA_ARGS__)
+#else
+#define diag_puts(s)
+#define diag_printf(...)
+#endif
 
 // Initializing buffers
 #define BUF_LEN         0x04 // 4 bytes to trigger interrupt
@@ -321,7 +323,7 @@ int dac_write(uint cspin, union dac_data *data)
     gpio_put(cspin, 1); // deselect DAC
 
 #ifdef SPI1_VERIFY_WRITES
-    printf("Wrote: ");
+    diag_printf("Wrote: ");
     printbuf(data_frame_buf, DAC_LEN);
 
     // read back
@@ -337,9 +339,9 @@ int dac_write(uint cspin, union dac_data *data)
 #endif
     gpio_put(cspin, 1); // deselect DAC
 
-    printf("Wrote: ");
+    diag_printf("Wrote: ");
     printbuf(data_frame_buf, DAC_LEN);
-    printf("Read:  ");
+    diag_printf("Read:  ");
     printbuf(dac_data_verify.frame_buf, DAC_LEN);
 #endif
 
@@ -351,17 +353,17 @@ int dac_send(int dac, union dac_data *data)
     int bytes_sent = 0;
     switch (dac) {
         case 0:
-            puts("sending to DAC0");
+            diag_puts("sending to DAC0");
             bytes_sent = dac_write(CS_DAC0, data);
             gpio_put(ACK, 1); // Acknowledge command
             break;
         case 1:
-            puts("sending to DAC1");
+            diag_puts("sending to DAC1");
             bytes_sent = dac_write(CS_DAC1, data);
             gpio_put(ACK, 1); // Acknowledge command
             break;
         default:
-            puts("invalid DAC");
+            diag_puts("invalid DAC");
             gpio_put(ERROR, 1); // indicate error
             break;
     }
@@ -413,9 +415,9 @@ int main(void)
     bool dac_init_success = dacInit();
     if (!dac_init_success)
         gpio_put(ERROR, 1);
-    printf("dac_init_success = %d\n", dac_init_success);
+    diag_printf("dac_init_success = %d\n", dac_init_success);
 
-    puts("goliath online");
+    diag_puts("goliath online");
 
     while (1) //main loop
     {
@@ -460,7 +462,7 @@ void handleCommand(union spi_command_data *command_data)
     // Verify parity
     bool cmd_parity = generate_parity(command_data->frame_buf);
     if (cmd_parity) {
-        printf("Bad parity: %d\n", cmd_parity);
+        diag_printf("Bad parity: %d\n", cmd_parity);
         printbuf(command_data->frame_buf, BUF_LEN);
         gpio_put(ERROR, 1); // indicate error
     } else {
@@ -468,12 +470,12 @@ void handleCommand(union spi_command_data *command_data)
         switch((enum spi_command)((command_data->frame_buf[0] >> 1) & 0x0F)) { //gets the 4 bits which define our address
             case CMD_DAC0_SET:
                 dac_data_0.setting.dac_setting = command_data->analog_set.dac_counts;
-                //printf("dac_data_0 setting = %d*%.1f = %d\n", sys_analog_set.setting.dac_counts, dac0_scale, dac_data_0.setting.dac_setting);
+                //diag_printf("dac_data_0 setting = %d*%.1f = %d\n", sys_analog_set.setting.dac_counts, dac0_scale, dac_data_0.setting.dac_setting);
                 dac_send(0, &dac_data_0);
                 break;
             case CMD_DAC1_SET:
                 dac_data_1.setting.dac_setting = command_data->analog_set.dac_counts;
-                //printf("dac_data_1 setting = %d*%.1f = %d\n", sys_analog_set.setting.dac_counts, dac1_scale, dac_data_1.setting.dac_setting);
+                //diag_printf("dac_data_1 setting = %d*%.1f = %d\n", sys_analog_set.setting.dac_counts, dac1_scale, dac_data_1.setting.dac_setting);
                 dac_send(1, &dac_data_1);
                 break;
             case CMD_RESET:
@@ -531,9 +533,9 @@ uint32_t readADC(uint8_t id)
 void printbin(char *pref, uint8_t *data, uint32_t len)
 {
     if (pref != NULL)
-        printf("  % 10s", pref);
+        diag_printf("  % 10s", pref);
     for (int bi = 0; bi < len; bi++) {
-        printf("  %0d%0d%0d%0d %0d%0d%0d%0d",
+        diag_printf("  %0d%0d%0d%0d %0d%0d%0d%0d",
                (data[bi] & 0x80) >> 7,
                (data[bi] & 0x40) >> 6,
                (data[bi] & 0x20) >> 5,
@@ -562,7 +564,7 @@ bool dacInit(void)
     gpio_put(LDAC, 1); // set high, active low
 
     for (int bi = 0; bi < 4; bi ++) {
-        printf("  %0d%0d%0d%0d %0d%0d%0d%0d",
+        diag_printf("  %0d%0d%0d%0d %0d%0d%0d%0d",
                (dac_config1_0.frame_buf[bi] & 0x80) >> 7,
                (dac_config1_0.frame_buf[bi] & 0x40) >> 6,
                (dac_config1_0.frame_buf[bi] & 0x20) >> 5,
@@ -641,28 +643,28 @@ bool dacInit(void)
     dac_trigger_0.setting.sclr = 0;
     dac_trigger_1.setting.sclr = 0;
 
-    printf("Config struct results: ");
+    diag_printf("Config struct results: ");
     printbuf(dac_config1_0.frame_buf, BUF_LEN);
-    printf("Desired results: ");
+    diag_printf("Desired results: ");
     printbuf(config_frame_buf, BUF_LEN);
 
-    printf("%zu =? %zu\n", sizeof(struct dac_config1_frame), sizeof(union dac_config1));
+    diag_printf("%zu =? %zu\n", sizeof(struct dac_config1_frame), sizeof(union dac_config1));
 
-    printf("  rw         = %0X\n", dac_config1_0.setting.rw);
-    printf("  address    = %0X\n", dac_config1_0.setting.address);
-    printf("  en_tmp_cal = %0X\n", dac_config1_0.setting.en_tmp_cal);
-    printf("  reserved0  = %0X\n", dac_config1_0.setting.reserved0);
-    printf("  tnh_mask   = %0X\n", dac_config1_0.setting.tnh_mask);
-    printf("  reserved1  = %0X\n", dac_config1_0.setting.reserved1);
-    printf("  ldac_mode  = %0X\n", dac_config1_0.setting.ldac_mode);
-    printf("  fsdo       = %0X\n", dac_config1_0.setting.fsdo);
-    printf("  enalmp     = %0X\n", dac_config1_0.setting.enalmp);
-    printf("  dsdo       = %0X\n", dac_config1_0.setting.dsdo);
-    printf("  fset       = %0X\n", dac_config1_0.setting.fset);
-    printf("  vrefval    = %0X\n", dac_config1_0.setting.vrefval);
-    printf("  reserved2  = %0X\n", dac_config1_0.setting.reserved2);
-    printf("  pdn        = %0X\n", dac_config1_0.setting.pdn);
-    printf("  reserved3  = %0X\n", dac_config1_0.setting.reserved3);
+    diag_printf("  rw         = %0X\n", dac_config1_0.setting.rw);
+    diag_printf("  address    = %0X\n", dac_config1_0.setting.address);
+    diag_printf("  en_tmp_cal = %0X\n", dac_config1_0.setting.en_tmp_cal);
+    diag_printf("  reserved0  = %0X\n", dac_config1_0.setting.reserved0);
+    diag_printf("  tnh_mask   = %0X\n", dac_config1_0.setting.tnh_mask);
+    diag_printf("  reserved1  = %0X\n", dac_config1_0.setting.reserved1);
+    diag_printf("  ldac_mode  = %0X\n", dac_config1_0.setting.ldac_mode);
+    diag_printf("  fsdo       = %0X\n", dac_config1_0.setting.fsdo);
+    diag_printf("  enalmp     = %0X\n", dac_config1_0.setting.enalmp);
+    diag_printf("  dsdo       = %0X\n", dac_config1_0.setting.dsdo);
+    diag_printf("  fset       = %0X\n", dac_config1_0.setting.fset);
+    diag_printf("  vrefval    = %0X\n", dac_config1_0.setting.vrefval);
+    diag_printf("  reserved2  = %0X\n", dac_config1_0.setting.reserved2);
+    diag_printf("  pdn        = %0X\n", dac_config1_0.setting.pdn);
+    diag_printf("  reserved3  = %0X\n", dac_config1_0.setting.reserved3);
 
     //now we start writing
     gpio_put(CS_DAC0, 0); // enable both!
@@ -672,7 +674,7 @@ bool dacInit(void)
     for (int i = 0; i < BUF_LEN; i++) {
         config_frame_buf[i] = dac_config1_0.frame_buf[DAC_LEN - i - 1];
     }
-    printf("Wrote: ");
+    diag_printf("Wrote: ");
     printbuf(config_frame_buf, BUF_LEN);
 #ifdef SPI1_USE_HARDWARE
     int bytes_written = hwspi1_write_blocking(spi1, config_frame_buf, DAC_LEN); // write the base config
@@ -683,10 +685,10 @@ bool dacInit(void)
 
     gpio_put(CS_DAC0, 1); // disable both again
     gpio_put(CS_DAC1, 1);
-    puts("DACs enabled");
+    diag_puts("DACs enabled");
 
     if (bytes_written != DAC_LEN) {
-        printf("Error: %d bytes written, expected %d\n", bytes_written, DAC_LEN);
+        diag_printf("Error: %d bytes written, expected %d\n", bytes_written, DAC_LEN);
         return false;
     }
 
@@ -705,7 +707,7 @@ bool dacInit(void)
     for (int i = 0; i < BUF_LEN; i++) {
         config_frame_buf[i] = dac_config1_0.frame_buf[DAC_LEN - i - 1];
     }
-    printf("Wrote: ");
+    diag_printf("Wrote: ");
     printbuf(config_frame_buf, BUF_LEN);
 
     // signal to LA
@@ -734,7 +736,7 @@ bool dacInit(void)
     for (int i = 0; i < BUF_LEN; i++) {
         config_frame_buf[i] = dac_config1_0.frame_buf[DAC_LEN - i - 1];
     }
-    printf("Wrote: ");
+    diag_printf("Wrote: ");
     printbuf(config_frame_buf, BUF_LEN);
 
     // second word
@@ -752,9 +754,9 @@ bool dacInit(void)
     gpio_put(TP3, 0);
     gpio_put(TP1, 0);
 
-    printf("Read: ");
+    diag_printf("Read: ");
     printbuf(dac_config1_0_verify1.frame_buf, BUF_LEN);
-    printf("      ");
+    diag_printf("      ");
     printbuf(dac_config1_0_verify2.frame_buf, BUF_LEN);
 
     // now set to zero
@@ -762,13 +764,13 @@ bool dacInit(void)
     // DAC 0
     bytes_written = dac_write(CS_DAC0, &dac_data_0);
     if (bytes_written != DAC_LEN) {
-        printf("Error: %d bytes written, expected %d\n", bytes_written, DAC_LEN);
+        diag_printf("Error: %d bytes written, expected %d\n", bytes_written, DAC_LEN);
         return false;
     }
     // DAC 1
     bytes_written = dac_write(CS_DAC1, &dac_data_1);
     if (bytes_written != DAC_LEN) {
-        printf("Error: %d bytes written, expected %d\n", bytes_written, DAC_LEN);
+        diag_printf("Error: %d bytes written, expected %d\n", bytes_written, DAC_LEN);
         return false;
     }
 
@@ -857,7 +859,7 @@ void spiInit(void)
     gpio_put(CS_DAC0, 1);
     gpio_put(CS_DAC1, 1);
 
-    printf("Initializing SPI\n");
+    diag_puts("Initializing SPI");
     spiSysInit();
 
 #ifdef SPI1_USE_HARDWARE
@@ -875,7 +877,7 @@ void printbuf(uint8_t *buf, size_t len)
 {
     int i;
     for (i = 0; i < len; ++i) {
-        printf("%02X", buf[i]);
+        diag_printf("%02X", buf[i]);
         if (i % 16 == 15)
             putchar('\n');
         else

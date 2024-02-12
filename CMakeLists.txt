@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.12)
 
+# options
+option(SPI1_USE_HARDWARE "Use hardware SPI1" OFF)
+option(SPI1_VERIFY_WRITES "Verify SPI1 writes" OFF)
+option(PRINT_DIAGNOSTICS "Print diagnostics" ON)
+
 # Pull in SDK from git
 set(PICO_SDK_FETCH_FROM_GIT on)
 include(pico_sdk_import.cmake)
@@ -24,6 +29,17 @@ add_executable(nr1b-analog-fw
 )
 
 add_compile_options(-Wall -Wextra)
+
+# defs
+if (SPI1_USE_HARDWARE)
+    target_compile_definitions(nr1b-analog-fw PUBLIC SPI1_USE_HARDWARE)
+endif()
+if (SPI1_VERIFY_WRITES)
+    target_compile_definitions(nr1b-analog-fw PUBLIC SPI1_VERIFY_WRITES)
+endif()
+if (PRINT_DIAGNOSTICS)
+    target_compile_definitions(nr1b-analog-fw PUBLIC PRINT_DIAGNOSTICS)
+endif()
 
 # Pull in basic dependencies
 target_link_libraries(nr1b-analog-fw pico_stdlib hardware_spi hardware_adc)
